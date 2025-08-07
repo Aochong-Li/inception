@@ -1,0 +1,17 @@
+models:
+  # - model_name: "/share/goyal/lio/reasoning/model/sky_math_8k/r1/Qwen2.5_Math_1.5B_sky_math8k_max_length_4096_bsz_32_epochs_10_checkpoint_64_r1_sky_math8k_rollout_4_max_length_3072_token_budget_314834944/actor/total_token_budget_143_steps"
+  #   nick_name: "Qwen2.5-Math-1.5B-sky-math8k-r1-sft64steps-rl143steps"
+  
+  # - model_name: "/share/goyal/lio/reasoning/model/sky_math_8k/sft/Qwen2.5_Math_1.5B_sky_math8k_max_length_4096_bsz_32_epochs_10/checkpoint-64"
+  #   nick_name: "Qwen2.5-Math-1.5B-sky-math8k-sft64steps"
+
+  # - model_name: "/share/goyal/lio/reasoning/model/sky_math_8k/sft/Qwen2.5_Math_1.5B_sky_math8k_max_length_4096_bsz_32_epochs_10/checkpoint-640"
+  #   nick_name: "Qwen2.5-Math-1.5B-sky-math8k-sft640steps"
+  
+  # - model_name: "/share/goyal/lio/reasoning/model/sky_math_8k/sft/Qwen2.5_Math_1.5B_sky_math8k_max_length_4096_bsz_32_epochs_10/checkpoint-1270"
+  #   nick_name: "Qwen2.5-Math-1.5B-sky-math8k-sft1270steps"
+  
+  - model_name: "/share/goyal/lio/reasoning/model/sky_math_8k/r1/Qwen2.5_Math_1.5B_sky_math8k_max_length_4096_bsz_32_epochs_10_checkpoint_64_r1_continue_sky_math_8k_rollout_4_max_length_3072_token_budget_629669888/actor/global_step_300"
+    nick_name: "Qwen2.5-Math-1.5B-sky-math8k-r1-continue-sft64steps-rl300steps"
+  
+  

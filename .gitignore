@@ -1,0 +1,23 @@
+# Ignore Python cache
+__pycache__/
+
+# Ignore log files
+*.log
+
+# Ignore secrets
+.env
+
+# Ignore some local results
+results/
+results/deepmath_7to9/
+results/hendrycks_math/
+results/math-500/
+share/
+
+# Ignore market models config
+config/market_models.yaml
+config/control_study.yaml
+data/
+
+notebooks/math
+notebooks/deepmath
