@@ -112,7 +112,7 @@ class OpenAI_Engine():
         if self.model == 'gpt-4o' and self.batch_rate_limit is None:
             self.batch_rate_limit = 20
 
-        if self.mode == 'chat_completions' or not self.batch_log_filepath.exists():
+        if self.mode == 'chat_completions':
             '''Prepare batch input'''
             self.prepare_chat_completions_input()
 
@@ -144,7 +144,7 @@ class OpenAI_Engine():
     def retrieve_outputs(self, overwrite=False, cancel_in_progress_jobs: bool = False):
         """Retrieve generated outputs from cache or batch logs."""
         if self.cache_filepath and Path(self.cache_filepath).exists() \
-            and (self.mode == 'chat_completions' or self.mode == 'batch_chat_completions'):
+            and (self.mode == 'chat_completions' or self.mode == 'batch_chat_completions' or self.mode == 'completions'):
             logger.info(f'Results are retrieved from {self.cache_filepath}')
             output_df = pd.read_pickle(self.cache_filepath)
         
