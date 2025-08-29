@@ -4,9 +4,9 @@ export CUDA_VISIBLE_DEVICES=0,1
 
 # -------- static bits you rarely touch --------
 MODELS_YAML="config/market_models.yaml"
-DATASET_NAME="allmath"
+DATASET_NAME="agentica-org/DeepScaleR-Preview-Dataset"
 SPLIT="test"
-SAMPLE_K=8
+SAMPLE_K=1
 DATASET_PATH="./data/${DATASET_NAME}"
 OUTPUT_DIR="./results/${DATASET_NAME}/benchmark"
 # ----------------------------------------------

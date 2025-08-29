@@ -10,7 +10,8 @@ OUTPUT_DIR="./results/${DATASET_NAME}/benchmark"
 
 # Define models as array of "model_name,nick_name" pairs
 MODELS_NICK=(
-    "deepseek-reasoner,DeepSeek-R1-0528"
+    "openai/gpt-oss-120b,GPT-OSS-120B"
+    # "deepseek-reasoner,DeepSeek-R1-0528"
     # "Qwen/Qwen3-235B-A22B,Qwen3-235B-A22B"
 )
 # Loop through each model
