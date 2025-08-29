@@ -1,0 +1,38 @@
+### model
+model_name_or_path: Qwen/Qwen2.5-1.5B
+
+### method
+stage: sft
+do_train: true
+finetuning_type: full
+deepspeed: examples/deepspeed/ds_z3_config.json  # choices: [ds_z0_config.json, ds_z2_config.json, ds_z3_config.json]
+
+### dataset
+dataset_dir: ./data
+dataset: DeepMath-level1-4-14k-sft-stage0
+template: qwen25_deepmath
+cutoff_len: 16384
+max_samples: 1000000
+overwrite_cache: true
+preprocessing_num_workers: 8
+
+### output
+output_dir: ./outputs/deepmath/Qwen2.5-1.5B-DeepMath-level1-4-14k-sft-stage0
+logging_steps: 5
+save_steps: 100
+plot_loss: true
+
+### train
+# Effective batch size = per_device_train_batch_size * gradient_accumulation_steps * num_gpus = 1 * 16 * 8 = 128
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 16
+learning_rate: 5.0e-5
+num_train_epochs: 10
+lr_scheduler_type: cosine
+warmup_ratio: 0.02
+bf16: true
+ddp_timeout: 180000000
+
+report_to: wandb
+run_name: Qwen2.5-1.5B-DeepMath-level1-4-14k-sft-stage0
+
