@@ -9,7 +9,7 @@ deepspeed: examples/deepspeed/ds_z3_config.json  # choices: [ds_z0_config.json, 
 
 ### dataset
 dataset_dir: ./data
-dataset: math8k-sft-QwQ-32B-16k-reasoning-traces-limo1000
+dataset: gptoss_high_filtered
 template: qwen25_no_system_prompt
 cutoff_len: 16640
 max_samples: 1000000
@@ -17,24 +17,23 @@ overwrite_cache: true
 preprocessing_num_workers: 8
 
 ### output
-output_dir: /share/goyal/lio/reasoning/model/sft/math8k/Qwen2.5-3B-math8k-distill-QwQ-32B-16k-limo1000-10epochs-2e-5lr
+output_dir: /share/goyal/lio/reasoning/model/sft/inception/Qwen2.5-3B-deepscaler-gptoss-high-16k-5epochs-4e-5lr
 logging_steps: 1
-save_steps: 15
+save_steps: 50
 plot_loss: true
 
 ### train
-# Effective batch size = per_device_train_batch_size * gradient_accumulation_steps * num_gpus = 1 * 16 * 4 = 64
+# Effective batch size = per_device_train_batch_size * gradient_accumulation_steps * num_gpus = 1 * 64 * 2 = 128
 per_device_train_batch_size: 1
-gradient_accumulation_steps: 16
-learning_rate: 2.0e-5
-num_train_epochs: 10
+gradient_accumulation_steps: 64
+learning_rate: 4.0e-5
+num_train_epochs: 5
 lr_scheduler_type: cosine
 warmup_ratio: 0.05
 max_grad_norm: 1.0
-weight_decay: 0.05
+weight_decay: 0.01
 bf16: true
 ddp_timeout: 180000000
 
 report_to: wandb
-run_name: Qwen2.5-3B-math8k-distill-QwQ-32B-16k-limo1000-10epochs-2e-5lr
-
+run_name: Qwen2.5-3B-deepscaler-gptoss-high-16k-5epochs-4e-5lr
