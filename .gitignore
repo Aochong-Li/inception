@@ -17,7 +17,14 @@ share/
 # Ignore market models config
 config/market_models.yaml
 config/control_study.yaml
-data/
 
 notebooks/math
 notebooks/deepmath
+
+# Ignore all data dirs
+data/
+
+# But keep these
+!sft/LLaMA-Factory/data/
+!sft/LLaMA-Factory/src/llamafactory/data/
+!sft/LLaMA-Factory/tests/data/
