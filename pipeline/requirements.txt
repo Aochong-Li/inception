@@ -1,0 +1,31 @@
+# Pipeline Requirements
+# Core dependencies for the inception pipeline
+
+# Data processing
+pandas>=2.2.3
+
+# Transformers and tokenizers
+transformers>=4.55.0
+
+# HuggingFace Hub (required by transformers, needs compatible version)
+# Version 0.36.0 has a bug with requests imports, try a different version
+huggingface-hub>=0.25.0,<0.35.0
+
+# HTTP library (required by huggingface_hub/transformers)
+requests>=2.31.0
+
+# vLLM for local model inference
+vllm>=0.6.0
+
+# FastText for refusal detection
+fasttext>=0.9.3
+
+# OpenAI API client
+openai>=1.90.0
+
+# Progress bars
+tqdm>=4.67.1
+
+# Environment variable management
+python-dotenv>=1.1.0
+
