@@ -1,16 +1,20 @@
 ## Installation
 
 ```bash
-uv venv rlvr_eval --python 3.12 rlvr_eval
-source rlvr_eval/bin/activate
-
-uv pip install -r requirements.txt
-uv pip install latex2sympy2==1.9.1 --no-deps
+uv venv --python 3.12
+source .venv/bin/activate
+uv sync
 
 ```
 
-## Run all models
+## In /core create a .env file containing DEEPINFRA_API_KEY
 
+## Ensure NVIDIA GPU is available
+'''bash
+uv run -- python -c "import torch; print(torch.cuda.is_available())"
+```
+
+## Run pipeline
 ```bash
-bash scripts/run_all_models.sh
+uv run pipeline/pipeline.py
 ```
