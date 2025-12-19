@@ -175,7 +175,6 @@ psutil==7.0.0
 ptyprocess==0.7.0
 pure_eval==0.2.3
 py-cpuinfo==9.0.0
-pyairports==2.1.1
 pyarrow==20.0.0
 pybase64==1.4.1
 pycountry==24.6.1

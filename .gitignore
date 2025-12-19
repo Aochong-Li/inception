@@ -25,6 +25,4 @@ notebooks/deepmath
 data/
 
 # But keep these
-!sft/LLaMA-Factory/data/
-!sft/LLaMA-Factory/src/llamafactory/data/
-!sft/LLaMA-Factory/tests/data/
+fasttext/
