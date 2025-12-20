@@ -31,3 +31,7 @@ data/
 
 # Models
 *.bin
+*.pickle
+
+# venv
+.venv
