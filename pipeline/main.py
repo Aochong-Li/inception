@@ -87,6 +87,7 @@ class OSSRefusalFeedbackInception:
         self.architect_tokenizer_name = architect_tokenizer_name or self.architect_model_name
         
         # Initialize tokenizer for token counting
+        # TODO: raise error if tokenizer_name is not provided
         if tokenizer_name:
             try:
                 self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -103,15 +104,15 @@ class OSSRefusalFeedbackInception:
             **kwargs
         )
         
-        # Load refusal detection model
         self.refusal_model = load_refusal_model(refusal_model_path)
         
-        # Load datasets
         self.load_datasets()
     
     def load_datasets(self):
         """Load inquiries from benchmark pickle file."""
-        pickle_path = "/home/md2292/inception-pipeline/pipeline/inquiries/benchmark/GPT-OSS-120B.pickle"
+        # TODO: this shouldn't load from benchmark results, it should load from raw inquiries
+
+        pickle_path = "./results/wmdp_inquiries_300/benchmark/GPT-OSS-120B.pickle"
         
         # Validate path exists
         if not os.path.exists(pickle_path):
@@ -233,6 +234,7 @@ class OSSRefusalFeedbackInception:
         print("\nStep 1: Getting blank slate reasoning from architect...")
         
         initial_reasoning_list = []
+        # TODO: this needs to be parallelized
         for idx, row in self.df.iterrows():
             inquiry = row['inquiry']
             blank_slate_reasoning = get_blank_slate_reasoning(
@@ -257,6 +259,14 @@ class OSSRefusalFeedbackInception:
         
         initial_responses = self.generate_oss_response(initial_prompts)
         self.df['initial_oss_response'] = initial_responses
+        import pdb; pdb.set_trace()
+        refusal_idx = find_first_refusal_chunk_idx(
+            initial_responses[0],
+            self.refusal_model,
+            preprocess_func=preprocess_reasoning
+        )
+
+        
         
         # Extract reasoning trace from initial OSS response
         self.df['cumulative_reasoning'] = self.df['initial_oss_response'].apply(
@@ -398,6 +408,8 @@ class OSSRefusalFeedbackInception:
 
 
 if __name__ == "__main__":
+    # TODO: changet this to arg parse not hardcoded
+
     pipeline = OSSRefusalFeedbackInception(
         model_name="openai/gpt-oss-120b",  # Model identifier (API provider hosts this)
         nick_name="GPT-OSS-120B",
@@ -407,5 +419,5 @@ if __name__ == "__main__":
         oss_temperature=0.6,
         oss_max_tokens=32768,
     )
-    
+    import pdb; pdb.set_trace()
     pipeline.run_pipeline()

@@ -13,6 +13,10 @@ models:
   - model_name: "Qwen/Qwen3-235B-A22B-Thinking-2507"
     nick_name: "Qwen3-235B-A22B-Thinking-2507"
     
+# Kimi 
+  - model_name: "moonshotai/Kimi-K2-Thinking"
+    nick_name: "Kimi-K2-Thinking"
+
   # OpenAI OSS
   - model_name: "openai/gpt-oss-120b"
     nick_name: "GPT-OSS-120B"

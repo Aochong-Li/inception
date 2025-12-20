@@ -5,6 +5,19 @@ Refusal detection logic using FastText model.
 from typing import Optional
 import fasttext
 from pipeline.reasoning import preprocess_reasoning
+import numpy as np
+
+_original_array = np.array
+def _patched_array(obj, dtype=None, copy=True, order='K', subok=False, ndmin=0, like=None):
+    """Patched np.array that handles copy=False gracefully for NumPy 2.0 compatibility."""
+    try:
+        return _original_array(obj, dtype=dtype, copy=copy, order=order, subok=subok, ndmin=ndmin, like=like)
+    except ValueError as e:
+        if "Unable to avoid copy" in str(e) and copy is False:
+            # Fall back to allowing copy when copy=False fails
+            return _original_array(obj, dtype=dtype, copy=True, order=order, subok=subok, ndmin=ndmin, like=like)
+        raise
+np.array = _patched_array
 
 
 def find_first_refusal_chunk_idx(
@@ -23,6 +36,7 @@ def find_first_refusal_chunk_idx(
     Returns:
         Index of first refusal chunk, or None if no refusal found
     """
+    import pdb; pdb.set_trace()
     if preprocess_func is None:
         preprocess_func = preprocess_reasoning
     

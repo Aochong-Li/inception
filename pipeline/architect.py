@@ -51,18 +51,18 @@ def get_blank_slate_reasoning(
     # Generate response from architect
     try:
         response_df = architect_engine.generate(prompts=[prompt])
-        if response_df.empty or 'response' not in response_df.columns:
-            return ""
+        # if response_df.empty or 'response' not in response_df.columns:
+        #     return ""
         
         architect_response = response_df.iloc[0]['response']
-        if not isinstance(architect_response, str):
-            architect_response = str(architect_response)
+        # if not isinstance(architect_response, str):
+        #     architect_response = str(architect_response)
         
         # Extract reasoning trace
         reasoning_trace = extract_reasoning_trace(architect_response)
         
         # Limit to first 40 tokens
-        limited_reasoning = get_first_n_tokens(reasoning_trace, 40, tokenizer)
+        limited_reasoning = get_first_n_tokens(reasoning_trace, 1024, tokenizer)
         return limited_reasoning
     except Exception as e:
         print(f"Error generating blank slate reasoning: {e}")
