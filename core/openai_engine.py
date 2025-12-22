@@ -16,10 +16,11 @@ class OpenAI_Engine():
         self,
         input_df: pd.DataFrame,
         prompt_template: str = "",
+        system_message: str = "",
         developer_message: str = "",
         template_map: dict[str, str] = {},
         nick_name: str = "gpt_engine",
-        batch_io_root: str = "/home/al2644/research/openai_batch_io/reasoning",
+        batch_io_root: str = "../openai_batch_io",
         cache_filepath: str = "",
         model: str = "deepseek-chat",
         client_name: str = "openai",
@@ -33,6 +34,7 @@ class OpenAI_Engine():
     ):
         self.input_df = input_df
         self.prompt_template = prompt_template
+        self.system_message = system_message
         self.developer_message = developer_message
         self.template_map = template_map
 
@@ -51,6 +53,8 @@ class OpenAI_Engine():
         self.mode = mode
         self.batch_rate_limit = batch_rate_limit
 
+        assert self.n == 1 or self.temperature > 0.0, "When n > 1, temperature must be greater than 0.0"
+
     def prepare_chat_completions_input(self):
         """Prepare batch input file with prompts formatted from the input dataframe."""
         assert self.input_filepath is not None, 'input_filepath is required'
@@ -68,6 +72,7 @@ class OpenAI_Engine():
 
             query = openaiapi.batch_chat_completions_template(
                 input_prompt=input_prompt,
+                system_message=self.system_message,
                 developer_message=self.developer_message,
                 model=self.model,
                 client_name=self.client_name,
@@ -90,8 +95,8 @@ class OpenAI_Engine():
             self.input_filepath.unlink()
 
         for idx, row in tqdm(self.input_df.iterrows(), total=len(self.input_df)):
-            input_prompt = row['prompt']
-
+            input_prompt = row['prompt'] 
+            
             query = openaiapi.batch_completions_template(
                 input_prompt=input_prompt,
                 model=self.model,
@@ -112,7 +117,7 @@ class OpenAI_Engine():
         if self.model == 'gpt-4o' and self.batch_rate_limit is None:
             self.batch_rate_limit = 20
 
-        if self.mode == 'chat_completions':
+        if self.mode == 'chat_completions' or not self.batch_log_filepath.exists():
             '''Prepare batch input'''
             self.prepare_chat_completions_input()
 
@@ -144,7 +149,7 @@ class OpenAI_Engine():
     def retrieve_outputs(self, overwrite=False, cancel_in_progress_jobs: bool = False):
         """Retrieve generated outputs from cache or batch logs."""
         if self.cache_filepath and Path(self.cache_filepath).exists() \
-            and (self.mode == 'chat_completions' or self.mode == 'batch_chat_completions' or self.mode == 'completions'):
+            and (self.mode == 'chat_completions' or self.mode == 'batch_chat_completions'):
             logger.info(f'Results are retrieved from {self.cache_filepath}')
             output_df = pd.read_pickle(self.cache_filepath)
         

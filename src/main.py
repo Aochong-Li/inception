@@ -140,6 +140,8 @@ class InceptionEngine:
             d. continue with architect engine
         STEP 3: save results
         """
+        def incept_thinking ()
+
 
 
 

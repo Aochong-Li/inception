@@ -68,10 +68,13 @@ def create_client(client_name: str) -> OpenAI:
 # ---------------------------------------------------------------------------
 # Wrapper for chat completions and completions
 # ---------------------------------------------------------------------------
+
+# This is the old version. The new version is under test. Delete this later.
 def generate_chat_completions(
     *,
     input_prompt: str,
-    developer_message: str = "You are a helpful assistant",
+    developer_message: str = "",
+    system_message: str = "",
     model: str = "gpt-4o",
     client_name: str = "openai",
     temperature: float = 0.6,
@@ -85,9 +88,12 @@ def generate_chat_completions(
 ) -> Tuple[Optional[List[str]], List[str], int]:
     client = create_client(client_name)
     messages = [
-        {"role": "system", "content": developer_message},
         {"role": "user", "content": input_prompt},
     ]
+    if system_message != "":
+        messages.insert(0, {"role": "system", "content": system_message})
+    elif developer_message != "":
+        messages.insert(0, {"role": "developer", "content": developer_message})
 
     errors: List[str] = []
     for attempt in range(1, max_attempts + 1):
@@ -111,7 +117,7 @@ def generate_chat_completions(
                 ], errors, attempt
             return [c.message.content for c in resp.choices], errors, attempt
         except RETRYABLE as exc:
-            errors.append(repr(exc))
+            errors.append(exc)
             if attempt == max_attempts:
                 logger.error("%s – final failure", exc)
                 return None, errors, attempt
@@ -128,7 +134,7 @@ def generate_chat_completions(
             logger.warning("%s – retry %d/%d in %.1fs", exc, attempt, max_attempts, delay)
             time.sleep(delay)
         except Exception as exc:
-            errors.append(repr(exc))
+            errors.append(exc)
             logger.error("Non‑retryable error: %s", exc)
             return None, errors, attempt
 
@@ -149,6 +155,7 @@ def generate_completions(
     max_attempts: int = 3,
 ) -> Tuple[Optional[List[str]], List[str], int]:
     client = create_client(client_name)
+    raise Exception("This is not useable yet. Still under test.")
     
     errors: List[str] = []
     for attempt in range(1, max_attempts + 1):
@@ -191,6 +198,7 @@ def generate_completions(
             return None, errors, attempt
 
     return None, errors, max_attempts
+
 # ---------------------------------------------------------------------------
 # Parallel helpers
 # ---------------------------------------------------------------------------
@@ -199,9 +207,20 @@ ResultRow = Tuple[int, Optional[List[str]], List[str], int]
 def _process(idx: int, req: Dict[str, Any], func_name: str) -> ResultRow:
     body = req["body"]
     if func_name == "chat_completions":
+        
+        messages = {}
+        for msg in body["messages"]:
+            if msg["role"] == "user":
+                messages["user"] = msg["content"]
+            elif msg["role"] == "system":
+                messages["system"] = msg["content"]
+            elif msg["role"] == "developer":
+                messages["developer"] = msg["content"]
+        
         response, errs, tries = generate_chat_completions(
-            input_prompt=body["messages"][1]["content"],
-            developer_message=body["messages"][0]["content"],
+            input_prompt=messages["user"],
+            system_message=messages.get("system", ""),
+            developer_message=messages.get("developer", ""),
             model=body["model"],
             client_name=req["client_name"],
             temperature=body.get("temperature", 0.0),
@@ -443,7 +462,8 @@ def batch_completions_template(
 
 def batch_chat_completions_template(
     input_prompt: str,
-    developer_message: str = 'You are a helpful assistant',
+    system_message: str = '',
+    developer_message: str = '',
     model: str = 'gpt-4o',
     client_name: str = '',
     custom_id: str = '',
@@ -455,6 +475,14 @@ def batch_chat_completions_template(
     presence_penalty: float = 0.0,
     stop: Optional[list[str]] = None
 ):
+    messages = [
+        {"role": "user", "content": input_prompt}
+    ]
+    if system_message != '':
+        messages.insert(0, {"role": "system", "content": system_message})
+    elif developer_message != '':
+        messages.insert(0, {"role": "developer", "content": developer_message})
+    
     query_template = {
         "custom_id": custom_id,
         "client_name": client_name,
@@ -463,10 +491,7 @@ def batch_chat_completions_template(
         "body": {
             "model": model,
             "temperature": temperature,
-            "messages": [
-                {"role": "developer", "content": developer_message},
-                {"role": "user", "content": input_prompt}
-            ],
+            "messages": messages,
             "max_tokens": max_tokens,
             "n": n,
             "top_p": top_p,
