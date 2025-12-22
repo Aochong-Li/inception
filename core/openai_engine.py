@@ -3,7 +3,7 @@
 import os
 import json
 
-from core import openaiapi
+from . import openaiapi
 import pandas as pd
 from tqdm import tqdm
 import logging
@@ -55,8 +55,16 @@ class OpenAI_Engine():
         """Prepare batch input file with prompts formatted from the input dataframe."""
         assert self.input_filepath is not None, 'input_filepath is required'
 
+        # Ensure the directory exists
+        self.input_filepath.parent.mkdir(parents=True, exist_ok=True)
+
         if self.input_filepath.exists():
             self.input_filepath.unlink()
+
+        # Check if dataframe is empty
+        if self.input_df.empty:
+            logger.warning(f'Input dataframe is empty. No batch input file will be created.')
+            return
 
         for idx, row in tqdm(self.input_df.iterrows(), total=len(self.input_df)):
             if self.template_map:
@@ -86,8 +94,16 @@ class OpenAI_Engine():
         """Prepare batch input file with prompts formatted from the input dataframe."""
         assert self.input_filepath is not None, 'input_filepath is required'
 
+        # Ensure the directory exists
+        self.input_filepath.parent.mkdir(parents=True, exist_ok=True)
+
         if self.input_filepath.exists():
             self.input_filepath.unlink()
+
+        # Check if dataframe is empty
+        if self.input_df.empty:
+            logger.warning(f'Input dataframe is empty. No batch input file will be created.')
+            return
 
         for idx, row in tqdm(self.input_df.iterrows(), total=len(self.input_df)):
             input_prompt = row['prompt']
@@ -117,8 +133,23 @@ class OpenAI_Engine():
             self.prepare_chat_completions_input()
 
             if self.mode == 'chat_completions':
-                if overwrite and Path(self.cache_filepath).exists():
-                    raise ValueError(f'The cache file {self.cache_filepath} already exists. Please manually delete this file for security reasons.')
+                if not overwrite and Path(self.cache_filepath).exists():
+                    print(f'The cache file {self.cache_filepath} already exists. Please manually delete this file for security reasons.')
+                    return
+                
+                # Check if input file exists before trying to read it
+                # If dataframe was empty, the file won't exist - skip processing
+                if not self.input_filepath.exists():
+                    logger.warning(
+                        f'Input file {self.input_filepath} does not exist. '
+                        f'Skipping processing - this may happen if the input dataframe is empty.'
+                    )
+                    # Create an empty result file to indicate this category was processed but had no data
+                    empty_df = pd.DataFrame(columns=['idx', 'response', 'error', 'retries'])
+                    empty_df.to_pickle(self.cache_filepath)
+                    logger.info(f'Created empty result file at {self.cache_filepath}')
+                    return
+                
                 openaiapi.generate_parallel_completions(input_filepath=self.input_filepath,
                                                     cache_filepath=self.cache_filepath,
                                                     num_workers=num_workers,

@@ -1,21 +1,34 @@
+# Inception: LLM Safety Evaluation Pipeline
+
+Safety evaluation pipeline for LLM responses using batch processing and parallel API calls.
+
 ## Installation
 
-### Setup uv virtual environment with dependencies.
 ```bash
+
+# Setup environment
 uv venv --python 3.12
 source .venv/bin/activate
 uv sync
 
+# Configure API keys
+echo "OPENAI_API_KEY=your_key_here" > core/.env
 ```
 
-In ```/core``` create a .env file containing DEEPINFRA_API_KEY
+## Usage
 
-### Ensure NVIDIA GPU is available
 ```bash
-uv run -- python -c "import torch; print(torch.cuda.is_available())"
+cd evaluation
+python safety-judge.py \
+  --input_filepath /path/to/data.pickle \
+  --inquiry_col inquiry \
+  --reasoning_trace_col incepted_response \
+  --overwrite
 ```
 
-### Run pipeline
-```bash
-uv run pipeline/pipeline.py
-```
+See `python safety-judge.py --help` for all options.
+
+## Project Structure
+
+- `core/`: LLM API clients and batch processing engine
+- `evaluation/`: Safety evaluation pipeline

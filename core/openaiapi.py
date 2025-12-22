@@ -15,6 +15,7 @@ import json, logging, math, os, random, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple, Callable
+from dotenv import load_dotenv
 
 import pandas as pd
 from openai import (OpenAI, APIError, APIConnectionError, RateLimitError,
@@ -30,6 +31,8 @@ if not logger.handlers:
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logger.addHandler(handler)
 logger.setLevel(logging.INFO)
+
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Provider registry – add new providers in one place
