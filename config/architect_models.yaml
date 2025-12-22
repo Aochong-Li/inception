@@ -1,7 +1,4 @@
 models:  
   - model_name: "open-thoughts/OpenThinker3-7B"
     nick_name: "OpenThinker3-7B-Qwen"
-
-  - model_name: "open-thoughts/OpenThinker2-7B"
-    nick_name: "OpenThinker2-7B-DeepSeek"
     
