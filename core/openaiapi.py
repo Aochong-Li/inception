@@ -31,6 +31,10 @@ if not logger.handlers:
     logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
+# Suppress successful HTTP request logs from OpenAI/httpx clients
+logging.getLogger("openai").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 # ---------------------------------------------------------------------------
 # Provider registry – add new providers in one place
 # ---------------------------------------------------------------------------
@@ -68,8 +72,6 @@ def create_client(client_name: str) -> OpenAI:
 # ---------------------------------------------------------------------------
 # Wrapper for chat completions and completions
 # ---------------------------------------------------------------------------
-
-# This is the old version. The new version is under test. Delete this later.
 def generate_chat_completions(
     *,
     input_prompt: str,
@@ -155,8 +157,7 @@ def generate_completions(
     max_attempts: int = 3,
 ) -> Tuple[Optional[List[str]], List[str], int]:
     client = create_client(client_name)
-    raise Exception("This is not useable yet. Still under test.")
-    
+
     errors: List[str] = []
     for attempt in range(1, max_attempts + 1):
         try:
@@ -170,13 +171,9 @@ def generate_completions(
                     stop=stop,
                 )
             resp = client.completions.create(**kwargs)
-            if model == "deepseek-reasoner":
-                return [
-                    f"{c.message.reasoning_content}\n</think>\n{c.message.content}" for c in resp.choices
-                ], errors, attempt
             return [c.text for c in resp.choices], errors, attempt
         except RETRYABLE as exc:
-            errors.append(repr(exc))
+            errors.append(exc)
             if attempt == max_attempts:
                 logger.error("%s – final failure", exc)
                 return None, errors, attempt
@@ -193,7 +190,7 @@ def generate_completions(
             logger.warning("%s – retry %d/%d in %.1fs", exc, attempt, max_attempts, delay)
             time.sleep(delay)
         except Exception as exc:
-            errors.append(repr(exc))
+            errors.append(exc)
             logger.error("Non‑retryable error: %s", exc)
             return None, errors, attempt
 

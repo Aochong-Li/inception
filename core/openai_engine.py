@@ -114,28 +114,25 @@ class OpenAI_Engine():
 
     def run_model(self, overwrite=False, num_workers=20):
         """Run the GPT model batch generation, optionally overwriting existing results."""
-        if self.model == 'gpt-4o' and self.batch_rate_limit is None:
-            self.batch_rate_limit = 20
+        if overwrite and Path(self.cache_filepath).exists():
+                raise ValueError(f'The cache file {self.cache_filepath} already exists. Please manually delete this file for security reasons.')
 
-        if self.mode == 'chat_completions' or not self.batch_log_filepath.exists():
-            '''Prepare batch input'''
+        if self.mode == 'chat_completions':
             self.prepare_chat_completions_input()
+            openaiapi.generate_parallel_completions(input_filepath=self.input_filepath,
+                                                cache_filepath=self.cache_filepath,
+                                                num_workers=num_workers,
+                                                func_name="chat_completions"
+                                                )
+            logger.info(f'Results are generated and stored at {self.cache_filepath}')
 
-            if self.mode == 'chat_completions':
-                if overwrite and Path(self.cache_filepath).exists():
-                    raise ValueError(f'The cache file {self.cache_filepath} already exists. Please manually delete this file for security reasons.')
-                openaiapi.generate_parallel_completions(input_filepath=self.input_filepath,
-                                                    cache_filepath=self.cache_filepath,
-                                                    num_workers=num_workers,
-                                                    func_name="chat_completions"
-                                                    )
-                logger.info(f'Results are generated and stored at {self.cache_filepath}')
+        elif self.mode == 'batch_chat_completions':
+            self.prepare_chat_completions_input()
+            openaiapi.minibatch_stream_generate_response(input_filepath=self.input_filepath,
+                                                            batch_log_filepath=self.batch_log_filepath,
+                                                            batch_size=self.batch_size,
+                                                            batch_rate_limit=self.batch_rate_limit)
 
-            elif self.mode == 'batch_chat_completions':
-                openaiapi.minibatch_stream_generate_response(input_filepath=self.input_filepath,
-                                                             batch_log_filepath=self.batch_log_filepath,
-                                                             batch_size=self.batch_size,
-                                                             batch_rate_limit=self.batch_rate_limit)
         elif self.mode == 'completions':
             self.prepare_completions_input()
             openaiapi.generate_parallel_completions(input_filepath=self.input_filepath,
@@ -143,13 +140,15 @@ class OpenAI_Engine():
                                                     num_workers=num_workers,
                                                     func_name="completions"
                                                     )
+        else:
+            raise ValueError(f'The mode {self.mode} is not supported.')
         
         logger.info(f'Results are generated and check {self.batch_log_filepath}')
 
     def retrieve_outputs(self, overwrite=False, cancel_in_progress_jobs: bool = False):
         """Retrieve generated outputs from cache or batch logs."""
         if self.cache_filepath and Path(self.cache_filepath).exists() \
-            and (self.mode == 'chat_completions' or self.mode == 'batch_chat_completions'):
+            and (self.mode == 'chat_completions' or self.mode == 'batch_chat_completions' or self.mode == 'completions'):
             logger.info(f'Results are retrieved from {self.cache_filepath}')
             output_df = pd.read_pickle(self.cache_filepath)
         

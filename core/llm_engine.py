@@ -420,7 +420,7 @@ class OpenLMEngine:
 
 if __name__ == '__main__':
     config = ModelConfig(
-        model_name="open-thoughts/OpenThinker3-1.5B",
+        model_name="Qwen/Qwen3-1.7B",
         tensor_parallel_size=1,
         gpu_memory_utilization=0.85,
         dtype="bfloat16",

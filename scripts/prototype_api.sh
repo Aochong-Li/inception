@@ -14,7 +14,7 @@ for model in data['models']:
 
 # Loop through each model
 echo "$MODELS_INFO" | while IFS=, read -r model_name nick_name; do
-    python stress-test/inception.py \
+    python src/prototype.py \
         --model_name "${model_name}" \
         --nick_name "${nick_name}" \
         --tokenizer_name "${model_name}" \

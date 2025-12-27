@@ -24,6 +24,8 @@ notebooks/deepmath
 # Ignore all data dirs
 data/
 
+fasttext_models/*.bin
+
 # But keep these
 !sft/LLaMA-Factory/data/
 !sft/LLaMA-Factory/src/llamafactory/data/
