@@ -69,6 +69,7 @@ class InceptionEngine:
         top_k: int = -1,
         mini_batch_size: int = None,
         sample_size: int = None,
+        min_reasoning_tokens: int = 0,
         overwrite: bool = False,
         client_name: str = "",
         **kwargs,
@@ -95,10 +96,11 @@ class InceptionEngine:
         self.max_num_batched_tokens = max_num_batched_tokens
         self.mini_batch_size = mini_batch_size
         self.sample_size = sample_size
+        self.min_reasoning_tokens = min_reasoning_tokens
         self.overwrite = overwrite
         self.client_name = client_name
 
-        self.output_dir = os.path.join(self.results_dir, "inception")
+        self.output_dir = os.path.join(self.results_dir, f"max_iterations_{self.max_iterations}")
         os.makedirs(self.output_dir, exist_ok=True)
         
         out_pickle = os.path.join(self.output_dir, f"{self.target_nick_name}.pickle")
@@ -142,7 +144,6 @@ class InceptionEngine:
 
     def run(self):
         self.result_df = pd.DataFrame()
-        
         for i in range(self.max_iterations):
             print(f"Iteration: {i+1}/{self.max_iterations}")
             
@@ -163,12 +164,13 @@ class InceptionEngine:
         sampling_overrides = len(self.df) * [{'max_tokens': max_tokens}]
         
         response = self.architect_engine.generate(prompts=self.df['prompt'], sampling_overrides=sampling_overrides)
-        response['response'] = response['response'].apply(lambda x: x.split("</think>")[1].strip() if "</think>" in x else x.strip())
+        response['response'] = response['response'].apply(lambda x: x.split("</think>")[1].rstrip() if "</think>" in x else x)
 
         assert len(response) == len(self.df), "response and dataframe must have the same length"
         response.index = self.df.index
         self.df[f'architect_iteration_{iteration_idx}'] = response['response']
         self.df['reasoning'] = self.df['reasoning'] + self.df[f'architect_iteration_{iteration_idx}']
+        self.df['reasoning'] = self.df['reasoning'].apply(lambda x: x.strip())
 
     def target_engine_cont(self, iteration_idx: int) -> pd.DataFrame:
         nick_name = f"{self.target_nick_name}_iteration_{iteration_idx}"
@@ -186,7 +188,7 @@ class InceptionEngine:
             mode="completions"
         )
         
-        self.target_engine.run_model(self.overwrite, num_workers=50)
+        self.target_engine.run_model(self.overwrite, num_workers=100)
         response = self.target_engine.retrieve_outputs()
         response = response.explode(['response']).set_index('idx')
         response['response'] = response['response'].apply(lambda x: x.split("</think>")[0].rstrip() if "</think>" in x else x)
@@ -206,17 +208,47 @@ class InceptionEngine:
 
         return response
 
+    def _remove_last_paragraph(self, text: str) -> str:
+        """Remove the last non-empty paragraph from text (split by double newlines)."""
+        paragraphs = text.split('\n\n')
+
+        for i in range(len(paragraphs) - 1, -1, -1):
+            if paragraphs[i].strip() and paragraphs[i] != '\n':
+                paragraphs.pop(i)
+                break
+
+        return '\n\n'.join(paragraphs)
+
     def concatenate_reasoning (self, response: pd.DataFrame, iteration_idx: int):
         assert len(response) == len(self.df), "response and dataframe must have the same length"
         response.index = self.df.index
+        
+        if "post_removal_response" in response.columns:
+            self.df[f'target_iteration_{iteration_idx}'] = response['post_removal_response']
 
-        self.df[f'target_iteration_{iteration_idx}'] = response['post_removal_response']
-        self.df['reasoning'] = self.df['reasoning'] + self.df[f'target_iteration_{iteration_idx}']
+            self.df['reasoning'] = self.df['reasoning'] + self.df[f'target_iteration_{iteration_idx}']
+            self.df['reasoning'] = self.df['reasoning'].apply(lambda x: x.strip())
 
-        no_refusal_idx = response[response['post_removal_response'] == response['response']].index
-        self.result_df = pd.concat([self.result_df, self.df.loc[no_refusal_idx]], ignore_index=True)
-        self.df = self.df.drop(no_refusal_idx).reset_index(drop=True)
-    
+            no_refusal_idx = response[response['post_removal_response'] == response['response']].index
+
+            graduate_idx = []
+            for idx in no_refusal_idx:
+                reasoning = self.df.at[idx, 'reasoning']
+                num_tokens = len(self.architect_tokenizer.encode(reasoning))
+
+                if num_tokens >= self.min_reasoning_tokens:
+                    graduate_idx.append(idx)
+                else:
+                    self.df.at[idx, 'reasoning'] = self._remove_last_paragraph(reasoning)
+
+            if graduate_idx:
+                self.result_df = pd.concat([self.result_df, self.df.loc[graduate_idx]], ignore_index=True)
+                self.df = self.df.drop(graduate_idx).reset_index(drop=True)
+        else:
+            self.df[f'target_iteration_{iteration_idx}'] = response['response']
+            self.df['reasoning'] = self.df['reasoning'] + self.df[f'target_iteration_{iteration_idx}']
+            self.df['reasoning'] = self.df['reasoning'].apply(lambda x: x.strip())
+ 
     def save_results (self):
         self.result_df.to_pickle(os.path.join(self.output_dir, f"{self.target_nick_name}.pickle"))
         
@@ -233,7 +265,8 @@ if __name__=="__main__":
             --tensor_parallel_size 1 \
             --dtype "bfloat16" \
             --max_tokens 32768 \
-            --architect_initial_max_tokens 128 \
+            --min_reasoning_tokens 2048 \
+            --architect_initial_max_tokens 256 \
             --architect_reiterate_max_tokens 64 \
             --max_iterations 3 \
             --temperature 0.6 \
@@ -261,10 +294,12 @@ if __name__=="__main__":
                         help="Data type for model weights (e.g., bfloat16, float16)")
     parser.add_argument("--max_tokens", type=int, default=32768,
                         help="Maximum number of output tokens")
-    parser.add_argument("--architect_initial_max_tokens", type=int, default=128,
+    parser.add_argument("--architect_initial_max_tokens", type=int, default=256,
                         help="Maximum tokens for architect's initial reasoning generation")
     parser.add_argument("--architect_reiterate_max_tokens", type=int, default=64,
                         help="Maximum tokens for architect's reiteration")
+    parser.add_argument("--min_reasoning_tokens", type=int, default=2048,
+                        help="Minimum number of tokens in reasoning chain before graduation to results")
     parser.add_argument("--max_iterations", type=int, default=3,
                         help="Maximum number of inception iterations")
     parser.add_argument("--temperature", type=float, default=0.6,
@@ -290,5 +325,4 @@ if __name__=="__main__":
     engine = InceptionEngine(
         **vars(args),
     )
-    import pdb; pdb.set_trace()
     engine.run()

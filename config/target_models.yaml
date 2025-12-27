@@ -1,27 +1,27 @@
 models:
   # DeepSeek R1
-  - model_name: "deepseek-ai/DeepSeek-R1-0528"
-    nick_name: "DeepSeek-R1-0528"
-    client_name: "deepinfra"
+  # - model_name: "deepseek-ai/DeepSeek-R1-0528"
+  #   nick_name: "DeepSeek-R1-0528"
+  #   client_name: "deepinfra"
   
-#   - model_name: "deepseek-ai/DeepSeek-V3.2"
-#     nick_name: "DeepSeek-V3.2"
-#     client_name: "deepinfra"
+  - model_name: "deepseek-ai/DeepSeek-V3.2"
+    nick_name: "DeepSeek-V3.2"
+    client_name: "deepinfra"
 
 #   # Qwen3
-#   - model_name: "Qwen/Qwen3-235B-A22B-Thinking-2507"
-#     nick_name: "Qwen3-235B-A22B-Thinking-2507"
-#     client_name: "deepinfra"
+  - model_name: "Qwen/Qwen3-235B-A22B-Thinking-2507"
+    nick_name: "Qwen3-235B-A22B-Thinking-2507"
+    client_name: "deepinfra"
 
-#   - model_name: "Qwen/Qwen3-Next-80B-A3B-Thinking"
-#     nick_name: "Qwen3-Next-80B-A3B-Thinking"
-#     client_name: "togetherai"
+  - model_name: "Qwen/Qwen3-Next-80B-A3B-Thinking"
+    nick_name: "Qwen3-Next-80B-A3B-Thinking"
+    client_name: "togetherai"
 # # Kimi 
-#   - model_name: "moonshotai/Kimi-K2-Thinking"
-#     nick_name: "Kimi-K2-Thinking"
-#     client_name: "deepinfra"
+  - model_name: "moonshotai/Kimi-K2-Thinking"
+    nick_name: "Kimi-K2-Thinking"
+    client_name: "deepinfra"
 
 # # GLM
-#   - model_name: "zai-org/GLM-4.6"
-#     nick_name: "GLM-4.6"
-#     client_name: "deepinfra"
+  - model_name: "zai-org/GLM-4.6"
+    nick_name: "GLM-4.6"
+    client_name: "deepinfra"

@@ -5,6 +5,8 @@ import pandas as pd
 import nltk
 import re
 
+ENGLISH_TOKENIZER = nltk.data.load('tokenizers/punkt/english.pickle')
+
 def clean_text(text: str) -> str:
     """Remove asterisks and newlines, collapse whitespace."""
     cleaned = text.replace("*", "ß ")
@@ -74,6 +76,7 @@ def chop_at_refusal(
 ) -> str:
     """
     Chop the reasoning trace at the first refusal sentence.
+    Preserves all original formatting including newlines, spaces, and tabs.
 
     Args:
         reasoning_trace: The original text
@@ -81,11 +84,18 @@ def chop_at_refusal(
 
     Returns:
         Original text up to (not including) the refusal sentence.
+        Preserves all original whitespace and formatting.
         If refusal_idx is None, returns original text unchanged.
     """
     if refusal_idx is None:
         return reasoning_trace
 
-    sentences = split_sentences_nltk(reasoning_trace)
-    return " ".join(sentences[:refusal_idx])
+    tokenizer = ENGLISH_TOKENIZER
+    spans = list(tokenizer.span_tokenize(reasoning_trace))
 
+    if refusal_idx >= len(spans) or refusal_idx < 0:
+        return reasoning_trace
+
+    chop_position = spans[refusal_idx][0]
+    return reasoning_trace[:chop_position].rstrip()
+    
