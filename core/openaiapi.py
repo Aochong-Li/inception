@@ -118,27 +118,30 @@ def generate_chat_completions(
                     f"{c.message.reasoning_content}\n</think>\n{c.message.content}" for c in resp.choices
                 ], errors, attempt
             return [c.message.content for c in resp.choices], errors, attempt
-        except RETRYABLE as exc:
-            errors.append(exc)
-            if attempt == max_attempts:
-                logger.error("%s – final failure", exc)
-                return None, errors, attempt
-            # header‑aware back‑off
-            hdr_delay = None
-            if hasattr(exc, "response") and exc.response is not None:
-                retry_after = exc.response.headers.get("Retry-After")
-                if retry_after:
-                    try:
-                        hdr_delay = float(retry_after)
-                    except ValueError:
-                        hdr_delay = None
-            delay = hdr_delay if hdr_delay else min(30, 2 ** (attempt - 1)) * random.uniform(0.8, 1.2)
-            logger.warning("%s – retry %d/%d in %.1fs", exc, attempt, max_attempts, delay)
-            time.sleep(delay)
         except Exception as exc:
-            errors.append(exc)
-            logger.error("Non‑retryable error: %s", exc)
-            return None, errors, attempt
+            # Store error as string
+            error_msg = f"{type(exc).__name__}: {str(exc)}"
+            errors.append(error_msg)
+
+            # Retry any error unless it's the final attempt
+            if attempt < max_attempts:
+                # Calculate backoff delay
+                hdr_delay = None
+                if hasattr(exc, "response") and exc.response is not None:
+                    retry_after = exc.response.headers.get("Retry-After")
+                    if retry_after:
+                        try:
+                            hdr_delay = float(retry_after)
+                        except ValueError:
+                            pass
+                delay = hdr_delay if hdr_delay else min(30, 2 ** (attempt - 1)) * random.uniform(0.8, 1.2)
+                logger.warning("Error (attempt %d/%d): %s. Retrying in %.1fs",
+                              attempt, max_attempts, error_msg, delay)
+                time.sleep(delay)
+            else:
+                # Final attempt - return with error
+                logger.error("Final error (attempt %d): %s", attempt, error_msg)
+                return None, errors, attempt
 
     return None, errors, max_attempts
 
@@ -172,27 +175,29 @@ def generate_completions(
                 )
             resp = client.completions.create(**kwargs)
             return [c.text for c in resp.choices], errors, attempt
-        except RETRYABLE as exc:
-            errors.append(exc)
-            if attempt == max_attempts:
-                logger.error("%s – final failure", exc)
-                return None, errors, attempt
-            # header‑aware back‑off
-            hdr_delay = None
-            if hasattr(exc, "response") and exc.response is not None:
-                retry_after = exc.response.headers.get("Retry-After")
-                if retry_after:
-                    try:
-                        hdr_delay = float(retry_after)
-                    except ValueError:
-                        hdr_delay = None
-            delay = hdr_delay if hdr_delay else min(30, 2 ** (attempt - 1)) * random.uniform(0.8, 1.2)
-            logger.warning("%s – retry %d/%d in %.1fs", exc, attempt, max_attempts, delay)
-            time.sleep(delay)
         except Exception as exc:
-            errors.append(exc)
-            logger.error("Non‑retryable error: %s", exc)
-            return None, errors, attempt
+            error_msg = f"{type(exc).__name__}: {str(exc)}"
+            errors.append(error_msg)
+
+            # Retry any error unless it's the final attempt
+            if attempt < max_attempts:
+                # Calculate backoff delay
+                hdr_delay = None
+                if hasattr(exc, "response") and exc.response is not None:
+                    retry_after = exc.response.headers.get("Retry-After")
+                    if retry_after:
+                        try:
+                            hdr_delay = float(retry_after)
+                        except ValueError:
+                            pass
+                delay = hdr_delay if hdr_delay else min(30, 2 ** (attempt - 1)) * random.uniform(0.8, 1.2)
+                logger.warning("Error (attempt %d/%d): %s. Retrying in %.1fs",
+                              attempt, max_attempts, error_msg, delay)
+                time.sleep(delay)
+            else:
+                # Final attempt - return with error
+                logger.error("Final error (attempt %d): %s", attempt, error_msg)
+                return None, errors, attempt
 
     return None, errors, max_attempts
 
@@ -290,8 +295,9 @@ def generate_parallel_completions(
                 results.append(fut.result())
             except Exception as exc:
                 idx = futures[fut]
-                logger.error("Worker crashed on idx %s: %s", idx, exc)
-                results.append((idx, None, [repr(exc)], 0))
+                error_msg = f"{type(exc).__name__}: {str(exc)}"
+                logger.error("Worker crashed on idx %s: %s", idx, error_msg)
+                results.append((idx, None, [error_msg], 0))
 
             if (i + 1) % checkpoint_every == 0:
                 _save(cache_filepath, results)

@@ -188,12 +188,14 @@ class InceptionEngine:
             mode="completions"
         )
         
-        self.target_engine.run_model(self.overwrite, num_workers=100)
+        self.target_engine.run_model(self.overwrite, num_workers=50)
         response = self.target_engine.retrieve_outputs()
+
+        response["response"] = response["response"].fillna('')
         response = response.explode(['response']).set_index('idx')
         response['response'] = response['response'].apply(lambda x: x.split("</think>")[0].rstrip() if "</think>" in x else x)
-        
-        return response
+
+        return response[['response']]
     
     def remove_refusal(self, response: pd.DataFrame) -> pd.DataFrame:
         def remove(row: pd.Series) -> pd.Series:
@@ -220,16 +222,16 @@ class InceptionEngine:
         return '\n\n'.join(paragraphs)
 
     def concatenate_reasoning (self, response: pd.DataFrame, iteration_idx: int):
-        assert len(response) == len(self.df), "response and dataframe must have the same length"
-        response.index = self.df.index
-        
+        self.df = self.df.merge(response, left_index=True, right_index=True, how='left')
+
         if "post_removal_response" in response.columns:
-            self.df[f'target_iteration_{iteration_idx}'] = response['post_removal_response']
+            self.df = self.df.rename(columns={'post_removal_response': f'target_iteration_{iteration_idx}'})
 
             self.df['reasoning'] = self.df['reasoning'] + self.df[f'target_iteration_{iteration_idx}']
             self.df['reasoning'] = self.df['reasoning'].apply(lambda x: x.strip())
 
-            no_refusal_idx = response[response['post_removal_response'] == response['response']].index
+            no_refusal_idx = self.df[self.df[f'target_iteration_{iteration_idx}'] == self.df['response']].index
+            self.df = self.df.drop(columns=['response'])
 
             graduate_idx = []
             for idx in no_refusal_idx:
@@ -244,8 +246,9 @@ class InceptionEngine:
             if graduate_idx:
                 self.result_df = pd.concat([self.result_df, self.df.loc[graduate_idx]], ignore_index=True)
                 self.df = self.df.drop(graduate_idx).reset_index(drop=True)
+
         else:
-            self.df[f'target_iteration_{iteration_idx}'] = response['response']
+            self.df = self.df.rename(columns={'response': f'target_iteration_{iteration_idx}'})
             self.df['reasoning'] = self.df['reasoning'] + self.df[f'target_iteration_{iteration_idx}']
             self.df['reasoning'] = self.df['reasoning'].apply(lambda x: x.strip())
  
@@ -271,7 +274,7 @@ if __name__=="__main__":
             --max_iterations 3 \
             --temperature 0.6 \
             --top_p 1.0 \
-            --sample_size 40 \
+            --sample_size 10 \
             --client_name "deepinfra" \
             --overwrite
     """
