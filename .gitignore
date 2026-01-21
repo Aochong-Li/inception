@@ -1,0 +1,44 @@
+# Ignore Python cache
+__pycache__/
+
+# Ignore log files
+*.log
+
+# Ignore secrets
+.env
+
+# Ignore some local results
+results/
+results/deepmath_7to9/
+results/hendrycks_math/
+results/math-500/
+share/
+
+# Ignore market models config
+config/market_models.yaml
+config/control_study.yaml
+
+notebooks/math
+notebooks/deepmath
+
+# Ignore all data dirs
+data/
+
+# But keep these
+fasttext/
+
+# Agent notes
+agent/
+.claude/
+CLAUDE.md
+
+# Virtual Envs and Config
+.venv/
+.python-version
+uv.lock
+
+# Jupyter Ckpts
+.ipynb_checkpoints/
+
+# Dev data
+max_iterations_5
