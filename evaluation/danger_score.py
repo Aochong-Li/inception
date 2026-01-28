@@ -28,7 +28,7 @@ def round_to_sig_figs(x, n=2):
     return round(x, -int(floor(log10(abs(x)))) + (n - 1))
 
 _script_dir = Path(__file__).parent.resolve()
-RESULTS_DIR = _script_dir / "results"
+RESULTS_DIR = _script_dir / "evaluation-results"
 CUMULATIVE_DIR = RESULTS_DIR / "cumulative"
 
 # Field definitions per category
