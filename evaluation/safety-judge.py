@@ -12,11 +12,6 @@ This module evaluates LLM responses for safety using a comprehensive rubric that
 This rubric incorporates safety-gap analysis principles used in advanced red-teaming frameworks.
 """
 
-from prompts import BIOTERRORISM_EVALUATION_PROMPT_TEMPLATE, CYBERSECURITY_EVALUATION_PROMPT_TEMPLATE, CHEMICAL_EVALUATION_PROMPT_TEMPLATE
-import time
-import re
-import pandas as pd
-from core import OpenAI_Engine
 import os
 import sys
 import logging
@@ -26,7 +21,7 @@ import codecs
 import asyncio
 import shutil
 import argparse
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from pathlib import Path
 
 # Add parent directory to path to allow importing from core/
@@ -36,6 +31,30 @@ _script_dir = Path(__file__).parent.resolve()
 _parent_dir = _script_dir.parent.resolve()
 if str(_parent_dir) not in sys.path:
     sys.path.insert(0, str(_parent_dir))
+
+from prompts import BIOTERRORISM_EVALUATION_PROMPT_TEMPLATE, CYBERSECURITY_EVALUATION_PROMPT_TEMPLATE, CHEMICAL_EVALUATION_PROMPT_TEMPLATE
+import pandas as pd
+import importlib.util
+
+# Import core modules directly to avoid __init__.py triggering vllm import
+def _import_module_directly(module_name: str, module_path):
+    spec = importlib.util.spec_from_file_location(module_name, str(module_path))
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load module {module_name} from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+# Load openaiapi first since openai_engine depends on it
+_openaiapi = _import_module_directly("openaiapi", _parent_dir / "core" / "openaiapi.py")
+sys.modules["core.openaiapi"] = _openaiapi
+
+# Now load openai_engine with a patched import
+_openai_engine = _import_module_directly("openai_engine", _parent_dir / "core" / "openai_engine.py")
+
+OpenAI_Engine = _openai_engine.OpenAI_Engine
+validate_safety_response = _openaiapi.validate_safety_response
 
 
 logger = logging.getLogger(__name__)
@@ -61,6 +80,8 @@ class SafetyEvaluator:
         client_name: str = "openai",
         temperature: float = 0.0,  # Low temperature for consistent evaluation
         max_tokens: int = 256,
+        requests_per_second: float = 5.0,  # Rate limit for API requests
+        max_validation_retries: int = 3,  # Max retries for validation failures
     ):
         """
         Initialize the Safety Judge.
@@ -90,6 +111,8 @@ class SafetyEvaluator:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.category_col = category_col
+        self.requests_per_second = requests_per_second
+        self.max_validation_retries = max_validation_retries
         self.category_labels = {
             "chemical": chemical_label,
             "cybersecurity": cybersecurity_label,
@@ -287,6 +310,10 @@ class SafetyEvaluator:
             client_name=self.client_name,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
+            requests_per_second=self.requests_per_second,
+            validate_fn=validate_safety_response,
+            category=category,
+            max_validation_retries=self.max_validation_retries,
         )
 
         # Run the synchronous run_model in a thread pool so it can be awaited
@@ -395,6 +422,175 @@ class SafetyEvaluator:
         self.input_df = self.input_df.merge(
             self.eval_df, left_index=True, right_index=True, how='left')
         return self.input_df
+
+    def _identify_failed_rows(self, category: str) -> pd.DataFrame:
+        """
+        Identify rows with None or invalid JSON responses for a given category.
+
+        Uses the batches directly (which contain raw_response if already evaluated)
+        or checks the combined safety_judge pickle file.
+
+        Args:
+            category: Category to check ("bioterrorism", "chemical", "cybersecurity")
+
+        Returns:
+            DataFrame containing only the failed rows that need re-evaluation
+        """
+        batch = self.batches.get(category, pd.DataFrame())
+
+        if batch.empty:
+            logger.warning(f"No data for category '{category}'")
+            return pd.DataFrame()
+
+        # Check if raw_response column exists (from previous evaluation)
+        if 'raw_response' not in batch.columns:
+            logger.info(f"No previous evaluation found for category '{category}', all rows need evaluation")
+            return batch
+
+        failed_indices = []
+        for idx, row in batch.iterrows():
+            response = row.get('raw_response')
+
+            # Check for None/NaN responses
+            if response is None or (isinstance(response, float) and pd.isna(response)):
+                failed_indices.append(idx)
+                continue
+
+            # Validate the response structure
+            response_str = response[0] if isinstance(response, list) else response
+            if not validate_safety_response(response_str, category):
+                failed_indices.append(idx)
+
+        if not failed_indices:
+            logger.info(f"No failed rows found for category '{category}'")
+            return pd.DataFrame()
+
+        logger.info(f"Found {len(failed_indices)} failed rows for category '{category}'")
+        return batch.loc[failed_indices]
+
+    async def run_reeval(self, backup: bool = True) -> pd.DataFrame:
+        """
+        Re-evaluate only rows with None or invalid responses.
+
+        Args:
+            backup: If True, backup existing results before re-evaluation (default True)
+
+        Returns:
+            DataFrame with merged evaluation results
+        """
+        # Backup the combined results file
+        if backup:
+            combined_path = os.path.join(
+                self.output_dir, f"{self.nick_name}_safety_judge.pickle")
+            if os.path.exists(combined_path):
+                backup_path = combined_path + ".bak"
+                shutil.copy2(combined_path, backup_path)
+                logger.info(f"Backed up {combined_path} to {backup_path}")
+
+        reeval_results = {}
+
+        for category in self.category_labels.keys():
+            # Explode reasoning traces for this category
+            self.batches[category] = self._explode_reasoning_traces(self.batches[category])
+
+            failed_batch = self._identify_failed_rows(category)
+
+            if failed_batch.empty:
+                logger.info(f"Skipping category '{category}' - no failed rows to re-evaluate")
+                continue
+
+            logger.info(f"Re-evaluating {len(failed_batch)} rows for category '{category}'")
+
+            # Prepare re-evaluation batch
+            prompt_template = self.prompt_templates[category]
+            cache_filepath = os.path.join(
+                self.output_dir, f"{category}_safety_judge_reeval.pickle")
+
+            # Clear any existing reeval cache
+            if os.path.exists(cache_filepath):
+                os.remove(cache_filepath)
+
+            engine = OpenAI_Engine(
+                input_df=failed_batch.reset_index(drop=False),  # Keep original index as column
+                prompt_template=prompt_template,
+                template_map={
+                    "reasoning_trace": self.reasoning_trace_col
+                },
+                nick_name=f"safety_judge_{category}_reeval",
+                batch_io_root=str(Path.home()) +
+                "/inception-eval/evaluation/batch_io",
+                cache_filepath=cache_filepath,
+                model=self.eval_model,
+                client_name=self.client_name,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                requests_per_second=self.requests_per_second,
+                validate_fn=validate_safety_response,
+                category=category,
+                max_validation_retries=self.max_validation_retries,
+            )
+
+            # Run re-evaluation
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, engine.run_model, False)
+
+            # Load re-evaluation results
+            if os.path.exists(cache_filepath):
+                reeval_df = pd.read_pickle(cache_filepath)
+                reeval_results[category] = reeval_df
+                logger.info(f"Re-evaluated {len(reeval_df)} rows for category '{category}'")
+
+        # Merge re-evaluated results back into input_df
+        if reeval_results:
+            self._apply_reeval_results(reeval_results)
+
+        # Regenerate merged results
+        self.eval_df = self._merge_results()
+        combined_path = os.path.join(
+            self.output_dir, f"{self.nick_name}_safety_judge.pickle")
+        self.eval_df.to_pickle(combined_path)
+        logger.info(f"Re-evaluation completed. Combined results saved to {combined_path}")
+        return self.eval_df
+
+    def _apply_reeval_results(self, reeval_results: Dict[str, pd.DataFrame]) -> None:
+        """
+        Apply re-evaluation results back to the original batches and raw pickle files.
+
+        Args:
+            reeval_results: Dict mapping category to reeval result DataFrame
+        """
+        for category, reeval_df in reeval_results.items():
+            if reeval_df.empty:
+                continue
+
+            # Load the original raw pickle
+            raw_path = os.path.join(
+                self.output_dir, f"{category}_safety_judge_raw.pickle")
+
+            if not os.path.exists(raw_path):
+                logger.warning(f"No original raw pickle for category '{category}'")
+                continue
+
+            original_raw = pd.read_pickle(raw_path)
+
+            # The reeval_df has 'idx' column from generate_parallel_completions
+            # which corresponds to row numbers in the failed_batch
+            # We need to map these back to the original raw pickle indices
+
+            # For simplicity, update the raw pickle with new responses
+            # The idx in reeval_df corresponds to iteration order in failed_batch
+            if 'idx' in reeval_df.columns and 'idx' in original_raw.columns:
+                for _, row in reeval_df.iterrows():
+                    reeval_idx = row['idx']
+                    # Find the corresponding row in original_raw
+                    if reeval_idx in original_raw['idx'].values:
+                        mask = original_raw['idx'] == reeval_idx
+                        original_raw.loc[mask, 'response'] = row['response']
+                        original_raw.loc[mask, 'error'] = row['error']
+                        original_raw.loc[mask, 'retries'] = row['retries']
+
+                original_raw.to_pickle(raw_path)
+                logger.info(f"Updated raw pickle for category '{category}'")
 
 
 if __name__ == "__main__":
@@ -517,6 +713,26 @@ Example usage:
     )
 
     parser.add_argument(
+        "--reeval_only",
+        action="store_true",
+        help="Re-evaluate only rows with None/invalid responses (requires existing results)"
+    )
+
+    parser.add_argument(
+        "--rate_limit",
+        type=float,
+        default=5.0,
+        help="Rate limit in requests per second (default: 5.0, 0 = no limit)"
+    )
+
+    parser.add_argument(
+        "--max_validation_retries",
+        type=int,
+        default=3,
+        help="Maximum retries for validation failures (default: 3)"
+    )
+
+    parser.add_argument(
         "--max_rows",
         type=int,
         default=None,
@@ -569,11 +785,17 @@ Example usage:
         client_name=args.client_name,
         temperature=args.temperature,
         max_tokens=args.max_tokens,
+        requests_per_second=args.rate_limit,
+        max_validation_retries=args.max_validation_retries,
     )
 
-    # Run evaluation
-    logger.info(f"Starting safety evaluation with overwrite={args.overwrite}")
-    result_df = asyncio.run(safety_judge.run(overwrite=args.overwrite))
+    # Run evaluation or re-evaluation
+    if args.reeval_only:
+        logger.info("Starting re-evaluation of failed rows only")
+        result_df = asyncio.run(safety_judge.run_reeval(backup=True))
+    else:
+        logger.info(f"Starting safety evaluation with overwrite={args.overwrite}")
+        result_df = asyncio.run(safety_judge.run(overwrite=args.overwrite))
 
     if not result_df.empty:
         logger.info(
