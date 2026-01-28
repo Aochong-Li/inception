@@ -3,7 +3,10 @@
 import os
 import json
 
-from core import openaiapi
+try:
+    from . import openaiapi
+except ImportError:
+    import openaiapi
 import pandas as pd
 from tqdm import tqdm
 import logging
@@ -30,6 +33,10 @@ class OpenAI_Engine():
         batch_size: int = 20,
         mode: str = "chat_completions",
         batch_rate_limit: int = 10,
+        requests_per_second: float = 0.0,
+        validate_fn=None,
+        category: str = None,
+        max_validation_retries: int = 3,
     ):
         self.input_df = input_df
         self.prompt_template = prompt_template
@@ -50,6 +57,10 @@ class OpenAI_Engine():
         self.batch_size = batch_size
         self.mode = mode
         self.batch_rate_limit = batch_rate_limit
+        self.requests_per_second = requests_per_second
+        self.validate_fn = validate_fn
+        self.category = category
+        self.max_validation_retries = max_validation_retries
 
     def prepare_chat_completions_input(self):
         """Prepare batch input file with prompts formatted from the input dataframe."""
@@ -119,11 +130,16 @@ class OpenAI_Engine():
             if self.mode == 'chat_completions':
                 if overwrite and Path(self.cache_filepath).exists():
                     raise ValueError(f'The cache file {self.cache_filepath} already exists. Please manually delete this file for security reasons.')
-                openaiapi.generate_parallel_completions(input_filepath=self.input_filepath,
-                                                    cache_filepath=self.cache_filepath,
-                                                    num_workers=num_workers,
-                                                    func_name="chat_completions"
-                                                    )
+                openaiapi.generate_parallel_completions(
+                    input_filepath=self.input_filepath,
+                    cache_filepath=self.cache_filepath,
+                    num_workers=num_workers,
+                    func_name="chat_completions",
+                    requests_per_second=self.requests_per_second,
+                    validate_fn=self.validate_fn,
+                    category=self.category,
+                    max_validation_retries=self.max_validation_retries,
+                )
                 logger.info(f'Results are generated and stored at {self.cache_filepath}')
 
             elif self.mode == 'batch_chat_completions':
@@ -133,12 +149,17 @@ class OpenAI_Engine():
                                                              batch_rate_limit=self.batch_rate_limit)
         elif self.mode == 'completions':
             self.prepare_completions_input()
-            openaiapi.generate_parallel_completions(input_filepath=self.input_filepath,
-                                                    cache_filepath=self.cache_filepath,
-                                                    num_workers=num_workers,
-                                                    func_name="completions"
-                                                    )
-        
+            openaiapi.generate_parallel_completions(
+                input_filepath=self.input_filepath,
+                cache_filepath=self.cache_filepath,
+                num_workers=num_workers,
+                func_name="completions",
+                requests_per_second=self.requests_per_second,
+                validate_fn=self.validate_fn,
+                category=self.category,
+                max_validation_retries=self.max_validation_retries,
+            )
+
         logger.info(f'Results are generated and check {self.batch_log_filepath}')
 
     def retrieve_outputs(self, overwrite=False, cancel_in_progress_jobs: bool = False):
