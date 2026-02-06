@@ -126,7 +126,7 @@ def run_safety_judge(model_name: str, preprocessed_path: Path, eval_model: str, 
 def main():
     parser = argparse.ArgumentParser(description="Batch evaluation pipeline for all models")
     parser.add_argument("--models", nargs="+", default=MODELS, help="Models to evaluate")
-    parser.add_argument("--eval_model", default="gpt-4o-mini", help="Model to use for evaluation")
+    parser.add_argument("--eval_model", default="gpt-5-mini-2025-08-07", help="Model to use for evaluation")
     parser.add_argument("--client_name", default="openai", help="API client to use")
     parser.add_argument("--regenerate_sample", action="store_true", help="Regenerate sample indices")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for sampling")
