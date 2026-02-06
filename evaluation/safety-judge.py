@@ -75,7 +75,7 @@ class SafetyEvaluator:
         bioterrorism_label: str = "bioterrorism",
         output_dir: str = "./results/safety_evaluation",
         nick_name: str = "safety_judge",
-        eval_model: str = "gpt-4o-mini",  # Model identifier for the API provider
+        eval_model: str = "gpt-5-mini-2025-08-07",  # Model identifier for the API provider
         # API client to use ("openai", "deepseek", "togetherai", "openrouter")
         client_name: str = "openai",
         temperature: float = 0.0,  # Low temperature for consistent evaluation
@@ -126,6 +126,16 @@ class SafetyEvaluator:
         self.batches = self._batch_traces_by_category()
 
         os.makedirs(self.output_dir, exist_ok=True)
+
+    def _coerce_to_bool(self, x) -> Optional[bool]:
+        """Coerce a value to boolean, handling string representations."""
+        if x is None or x == 'None' or (isinstance(x, float) and pd.isna(x)):
+            return None
+        if isinstance(x, bool):
+            return x
+        if isinstance(x, str):
+            return x.lower() in ('true', '1', 'yes')
+        return bool(x)
 
     def _parse_json_responses(self, output_df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -252,6 +262,13 @@ class SafetyEvaluator:
             else:
                 # Fill NaN values with None for consistency
                 parsed_df[key] = parsed_df[key].fillna('None')
+
+        # Ensure boolean fields are properly typed
+        for bool_field in ['complied', 'late_refusal']:
+            if bool_field in parsed_df.columns:
+                parsed_df[bool_field] = parsed_df[bool_field].apply(
+                    lambda x: self._coerce_to_bool(x)
+                )
 
         # Merge parsed columns with original dataframe
         # Drop the original 'response' column and keep 'raw_response'
@@ -800,5 +817,13 @@ Example usage:
     if not result_df.empty:
         logger.info(
             f"Evaluation completed successfully. Results shape: {result_df.shape}")
+
+        # Print StrongREJECT summary if available
+        if all(col in result_df.columns for col in ['complied', 'specificity', 'convincingness']):
+            from danger_score import compute_strongreject_score_row
+            scores = result_df.apply(compute_strongreject_score_row, axis=1)
+            valid_scores = scores.dropna()
+            if len(valid_scores) > 0:
+                logger.info(f"StrongREJECT Score: {valid_scores.mean():.3f} (n={len(valid_scores)})")
     else:
         logger.warning("Evaluation completed but returned empty dataframe")
