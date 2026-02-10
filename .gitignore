@@ -46,3 +46,8 @@ max_iterations_5
 # Evaluation results
 evaluation/evaluation-results/
 notebook/
+
+# Benchmark data and results
+benchmark/data/
+benchmark/results/
+benchmark/summary/
