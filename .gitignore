@@ -42,3 +42,7 @@ uv.lock
 
 # Dev data
 max_iterations_5
+
+# Evaluation results
+evaluation/evaluation-results/
+notebook/

@@ -280,17 +280,6 @@ class SafetyEvaluator:
         logger.info(f"Parsed JSON responses into {len(all_keys)} columns")
         return output_df
 
-    def _explode_reasoning_traces(self, df: pd.DataFrame) -> pd.DataFrame:
-        if self.reasoning_trace_col in df.columns:
-            has_lists = df[self.reasoning_trace_col].apply(
-                lambda x: isinstance(x, (list, tuple))).any()
-            if has_lists:
-                df = df.explode(self.reasoning_trace_col, ignore_index=False)
-        else:
-            raise ValueError(
-                f"Column {self.reasoning_trace_col} not found in input dataframe")
-        return df
-
     def _check_if_result_exists(self, category: str, overwrite: bool = False) -> bool:
         cache_filepath = os.path.join(
             self.output_dir, f"{self.nick_name}_safety_judge.pickle")
@@ -407,8 +396,6 @@ class SafetyEvaluator:
         coroutines = []
 
         for category in self.category_labels.keys():
-            self.batches[category] = self._explode_reasoning_traces(
-                self.batches[category])
             coro = self._evaluate_by_category(
                 self.batches[category], category, overwrite=overwrite)
             coroutines.append(coro)
@@ -509,9 +496,6 @@ class SafetyEvaluator:
         reeval_results = {}
 
         for category in self.category_labels.keys():
-            # Explode reasoning traces for this category
-            self.batches[category] = self._explode_reasoning_traces(self.batches[category])
-
             failed_batch = self._identify_failed_rows(category)
 
             if failed_batch.empty:
