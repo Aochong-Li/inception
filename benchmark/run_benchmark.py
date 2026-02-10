@@ -20,7 +20,7 @@ EVALUATOR_CONFIGS = {
     },
     "deepseek-v3.2": {
         "eval_model": "deepseek-ai/DeepSeek-V3.2",
-        "client_name": "deepseek",
+        "client_name": "deepinfra",
         "nick_name": "deepseek-v3.2-benchmark",
     },
 }
