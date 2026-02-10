@@ -99,8 +99,8 @@ class IterationQualityEvaluator:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Import prompt template
-        from prompts import STRONGREJECT_ITERATION_PROMPT_TEMPLATE
+        # Import prompt template from same directory
+        from evaluation.prompts import STRONGREJECT_ITERATION_PROMPT_TEMPLATE
         self.prompt_template = STRONGREJECT_ITERATION_PROMPT_TEMPLATE
 
     def _build_prompt(
@@ -250,6 +250,7 @@ class IterationQualityEvaluator:
                     "iteration_number": "iteration_number"
                 },
                 nick_name=f"{nick_name}_iter_{iter_idx}",
+                batch_io_root=str(self.output_dir),  # Use output_dir for batch files
                 cache_filepath=cache_filepath,
                 model=self.eval_model,
                 client_name=self.client_name,

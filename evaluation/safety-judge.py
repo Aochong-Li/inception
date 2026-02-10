@@ -31,6 +31,8 @@ _script_dir = Path(__file__).parent.resolve()
 _parent_dir = _script_dir.parent.resolve()
 if str(_parent_dir) not in sys.path:
     sys.path.insert(0, str(_parent_dir))
+if str(_script_dir) not in sys.path:
+    sys.path.insert(0, str(_script_dir))
 
 from prompts import BIOTERRORISM_EVALUATION_PROMPT_TEMPLATE, CYBERSECURITY_EVALUATION_PROMPT_TEMPLATE, CHEMICAL_EVALUATION_PROMPT_TEMPLATE
 import pandas as pd
