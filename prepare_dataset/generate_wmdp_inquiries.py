@@ -158,11 +158,47 @@ class GenerateWMDPInquiries():
         repo_id = f"{username}/{hf_name}"
         dataset_dict.push_to_hub(repo_id, private=False)
 
+class GenerateWMDPShotExamples(GenerateWMDPInquiries):
+    def __init__(self,
+                 sample_size_per_category: int = 100,
+                 output_dir: str = './results/wmdp_shot_examples',
+                 wmdp_biochem_dataset_name: str="aochongoliverli/wmdp_biochem_inquiries_800",
+                 overwrite: bool = False,
+                 ):
+        self.sample_size_per_category = sample_size_per_category
+        self.output_dir = output_dir
+        self.overwrite = overwrite
+        self.wmdp_biochem_dataset_name = wmdp_biochem_dataset_name
+        os.makedirs(self.output_dir, exist_ok=True)
+
+        if not overwrite and os.path.exists(os.path.join(self.output_dir, "wmdp_shot_examples.pickle")):
+            self.df = pd.read_pickle(os.path.join(self.output_dir, "wmdp_shot_examples.pickle"))
+            return
+        os.makedirs(os.path.join(self.output_dir, "api"), exist_ok=True)
+        self.load_dataset()
+    
+    def load_dataset(self):
+        wmdp_biochem_dataset = load_dataset(self.wmdp_biochem_dataset_name)
+        categories = ["wmdp-bio"]
+        self.df = []
+        
+        for category in categories:
+            sample_df = pd.DataFrame(load_dataset("cais/wmdp", category, split="test"))
+            sample_df = sample_df[~sample_df['question'].isin(wmdp_biochem_dataset['test']['question'])].reset_index(drop=True)
+
+            if self.sample_size_per_category is not None:
+                sample_df = sample_df.sample(n=self.sample_size_per_category, random_state=42)
+                sample_df["category"] = category
+                sample_df["example"] = EXAMPLES[category]
+            self.df.append(sample_df)
+        
+        self.df = pd.concat(self.df, ignore_index=True)
+
 if __name__ == "__main__":
-    engine = GenerateWMDPInquiries(
-        sample_size_per_category=400,
-        output_dir="./results/wmdp_inquiries",
-        overwrite=False
+    engine = GenerateWMDPShotExamples(
+        sample_size_per_category=256,
+        output_dir="./results/wmdp_shot_examples",
+        overwrite=True
     )
-    # engine.generate_inquiries(merge=True)
-    engine.push_to_hf(username=USERNAME, hf_name="wmdp_biochem_inquiries_800")
+    engine.generate_inquiries(merge=True)
+    engine.push_to_hf(username=USERNAME, hf_name="wmdp_shot_examples_256")

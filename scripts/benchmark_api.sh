@@ -22,7 +22,7 @@ for model in data['models']:
 echo "$MODELS_INFO" | while IFS=, read -r model_name nick_name; do
     echo "Running model: $nick_name (model_name: $model_name)"
 
-    python benchmark_eval.py \
+    python benchmark.py \
     --model_name "$model_name" \
     --nick_name "$nick_name" \
     --tokenizer_name "$model_name" \

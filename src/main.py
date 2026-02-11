@@ -38,13 +38,21 @@ ARCHITECT_MODEL_CHAT_TEMPLATE = {
     "open-thoughts/OpenThinker3-7B": '''<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n<think> {reasoning}'''
 }
 
-TARGET_MODEL_CHAT_TEMPLATE = {
+TARGET_MODEL_THINK_TEMPLATE = {
     "deepseek-ai/DeepSeek-R1-0528": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>\n{reasoning}''',
     "deepseek-ai/DeepSeek-V3.2": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>{reasoning}''',
     "Qwen/Qwen3-235B-A22B-Thinking-2507": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n<think>\n{reasoning}''',
-    "Qwen/Qwen3-Next-80B-A3B-Thinking": '''<|im_start|>user\n{inquiry}<|im_end|>\nassistant\n<think>\n{reasoning}''',
+    "Qwen/Qwen3-Next-80B-A3B-Thinking": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n<think>\n{reasoning}''',
     "moonshotai/Kimi-K2-Thinking": "<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|><|im_user|>user<|im_middle|>{inquiry}<|im_end|><|im_assistant|>assistant<|im_middle|><think> {reasoning}",
     "zai-org/GLM-4.6": "[gMASK]<sop><|user|>\n{inquiry}\n<think>{reasoning}"
+}
+
+TARGET_MODEL_INSTRUCT_TEMPLATE = {
+    "deepseek-ai/DeepSeek-V3.2": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜>{reasoning}''',
+    "Qwen/Qwen3-235B-A22B-Instruct-2507": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n{reasoning}''',
+    "Qwen/Qwen3-Next-80B-A3B-Instruct": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n{reasoning}''',
+    "moonshotai/Kimi-K2-Thinking": "<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|>\n<|im_user|>user<|im_middle|>{inquiry}<|im_end|><|im_assistant|>assistant<|im_middle|>{reasoning}",
+    "zai-org/GLM-4.6": "[gMASK]<sop><|user|>\n{inquiry}<|assistant|>\n<think></think>\n{reasoning}"
 }
 
 class InceptionEngine:
@@ -72,11 +80,13 @@ class InceptionEngine:
         min_reasoning_tokens: int = 0,
         overwrite: bool = False,
         client_name: str = "",
+        instruct: bool = False,
         **kwargs,
     ):
         self.target_model_name = target_model_name
         self.architect_model_name = architect_model_name
         self.target_nick_name = target_nick_name
+        self.instruct = instruct
 
         self.dataset_name = dataset_name
         self.split_name = split_name
@@ -100,7 +110,7 @@ class InceptionEngine:
         self.overwrite = overwrite
         self.client_name = client_name
 
-        self.output_dir = os.path.join(self.results_dir, f"max_iterations_{self.max_iterations}")
+        self.output_dir = os.path.join(self.results_dir, 'think' if not self.instruct else 'instruct', f"max_iterations_{self.max_iterations}")
         os.makedirs(self.output_dir, exist_ok=True)
         
         out_pickle = os.path.join(self.output_dir, f"{self.target_nick_name}.pickle")
@@ -124,7 +134,8 @@ class InceptionEngine:
         self.target_engine = OpenAI_Engine(input_df=pd.DataFrame())
 
         self.architect_chat_template = ARCHITECT_MODEL_CHAT_TEMPLATE[self.architect_model_name]
-        self.target_chat_template = TARGET_MODEL_CHAT_TEMPLATE[self.target_model_name]
+        target_templates = TARGET_MODEL_INSTRUCT_TEMPLATE if self.instruct else TARGET_MODEL_THINK_TEMPLATE
+        self.target_chat_template = target_templates[self.target_model_name]
         self.refusal_classifier = fasttext.load_model(os.path.join(os.path.dirname(__file__), "../fasttext_models", "refusal_model.bin"))
         
         self.load_dataset()
@@ -146,17 +157,26 @@ class InceptionEngine:
         self.result_df = pd.DataFrame()
         for i in range(self.max_iterations):
             print(f"Iteration: {i+1}/{self.max_iterations}")
-            
+
             self.architect_engine_cont(i)
             response = self.target_engine_cont(i)
             if i < self.max_iterations - 1:
                 response = self.remove_refusal(response)
 
             self.concatenate_reasoning(response, i)
-        
+            self.save_checkpoint(i)
+
         self.result_df = pd.concat([self.result_df, self.df], ignore_index=True)
 
         self.save_results()
+
+    def save_checkpoint(self, iteration_idx: int):
+        checkpoint_dir = os.path.join(self.output_dir, "checkpoints")
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        self.df.to_pickle(os.path.join(checkpoint_dir, f"{self.target_nick_name}_iter_{iteration_idx}.pickle"))
+        if not self.result_df.empty:
+            self.result_df.to_pickle(os.path.join(checkpoint_dir, f"{self.target_nick_name}_graduated_iter_{iteration_idx}.pickle"))
+        print(f"Checkpoint saved: iteration {iteration_idx}")
 
     def architect_engine_cont(self, iteration_idx: int) -> None:
         self.df['prompt'] = self.df.apply(lambda x: self.architect_chat_template.format(inquiry=x['inquiry'], reasoning=x['reasoning']), axis=1)
@@ -322,9 +342,11 @@ if __name__=="__main__":
                         help="Name of the client (for OpenAI or other APIs)")
     parser.add_argument("--overwrite", action="store_true",
                         help="Overwrite existing results")
+    parser.add_argument("--instruct", action="store_true",
+                        help="Instruct mode: inject into assistant response instead of <think> block")
 
     args = parser.parse_args()
-
+    
     engine = InceptionEngine(
         **vars(args),
     )
