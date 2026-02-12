@@ -52,6 +52,7 @@ notebook/
 benchmark/data/
 benchmark/results/
 benchmark/summary/
+think-vs-instruct-benchmark/
 
 # Evaluation results (generated output)
 evaluation-results/
