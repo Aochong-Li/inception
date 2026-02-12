@@ -45,6 +45,7 @@ max_iterations_5
 
 # Evaluation results
 evaluation/evaluation-results/
+inception-results/
 notebook/
 
 # Benchmark data and results
