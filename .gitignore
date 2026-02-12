@@ -52,3 +52,6 @@ notebook/
 benchmark/data/
 benchmark/results/
 benchmark/summary/
+
+# Evaluation results (generated output)
+evaluation-results/
