@@ -24,16 +24,31 @@ notebooks/deepmath
 # Ignore all data dirs
 data/
 
-fasttext_models/*.bin
-
 # But keep these
-!sft/LLaMA-Factory/data/
-!sft/LLaMA-Factory/src/llamafactory/data/
-!sft/LLaMA-Factory/tests/data/
+fasttext/
 
-# Models
-*.bin
-*.pickle
+# Agent notes
+agent/
+.claude/
+CLAUDE.md
 
-# venv
-.venv
+# Virtual Envs and Config
+.venv/
+.python-version
+uv.lock
+
+# Jupyter Ckpts
+.ipynb_checkpoints/
+
+# Dev data
+max_iterations_5
+
+# Evaluation results
+evaluation/evaluation-results/
+inception-results/
+notebook/
+
+# Benchmark data and results
+benchmark/data/
+benchmark/results/
+benchmark/summary/
