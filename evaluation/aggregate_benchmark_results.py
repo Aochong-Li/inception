@@ -13,7 +13,7 @@ import pandas as pd
 
 from danger_score import compute_strongreject_score_row
 
-BENCHMARK_RESULTS_DIR = Path(__file__).parent.parent / "evaluation-results" / "benchmark"
+BENCHMARK_RESULTS_DIR = Path(__file__).parent.parent / "think-vs-instruct-benchmark" / "evaluation-results" / "benchmark"
 
 
 def load_model_results(model_dir: Path) -> Optional[pd.DataFrame]:
