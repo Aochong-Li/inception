@@ -166,7 +166,7 @@ class SafetyEvaluator:
             response_str = row.get('response', '')
             parsed_row = {}
 
-            if pd.isna(response_str) or not response_str:
+            if response_str is None or pd.isna(response_str) or (isinstance(response_str, str) and len(response_str) == 0):
                 parsed_data.append({})
                 continue
 
@@ -247,7 +247,7 @@ class SafetyEvaluator:
             except (json.JSONDecodeError, ValueError, TypeError, SyntaxError) as e:
                 # If parsing fails, leave as empty dict
                 parsed_row = {}
-                if idx < 5:  # Only print first few errors to avoid spam
+                if isinstance(idx, int) and idx < 5:  # Only print first few errors to avoid spam
                     print(f"Warning: Failed to parse JSON for idx {idx}: {e}")
                     print(
                         f"  Response string (first 200 chars): {str(response_str)[:200]}")
@@ -349,7 +349,8 @@ class SafetyEvaluator:
                     continue
                 if 'idx' in df.columns:
                     df = df.set_index('idx')
-                df = self._parse_json_responses(df)
+                if isinstance(df, pd.DataFrame):
+                    df = self._parse_json_responses(df)
                 dataframes.append(df)
             else:
                 logger.warning(
@@ -396,14 +397,15 @@ class SafetyEvaluator:
         coroutines = []
 
         for category in self.category_labels.keys():
-            coro = self._evaluate_by_category(
-                self.batches[category], category, overwrite=overwrite)
-            coroutines.append(coro)
+            batch = self.batches[category]
+            if isinstance(batch, pd.DataFrame):
+                coro = self._evaluate_by_category(batch, category, overwrite=overwrite)
+                coroutines.append(coro)
 
         logger.info(
             f"Running safety evaluation using {self.eval_model} via {self.client_name}")
 
-        results = await asyncio.gather(*coroutines)
+        await asyncio.gather(*coroutines)
 
         logger.info(f"\nEvaluation Completed:")
         logger.info(f"  Result pickle files saved in {self.output_dir}")
@@ -451,7 +453,7 @@ class SafetyEvaluator:
         # Check if raw_response column exists (from previous evaluation)
         if 'raw_response' not in batch.columns:
             logger.info(f"No previous evaluation found for category '{category}', all rows need evaluation")
-            return batch
+            return batch if isinstance(batch, pd.DataFrame) else pd.DataFrame()
 
         failed_indices = []
         for idx, row in batch.iterrows():
@@ -472,7 +474,8 @@ class SafetyEvaluator:
             return pd.DataFrame()
 
         logger.info(f"Found {len(failed_indices)} failed rows for category '{category}'")
-        return batch.loc[failed_indices]
+        failed_batch = batch.loc[failed_indices]
+        return failed_batch if isinstance(failed_batch, pd.DataFrame) else pd.DataFrame()
 
     async def run_reeval(self, backup: bool = True) -> pd.DataFrame:
         """
@@ -586,7 +589,8 @@ class SafetyEvaluator:
                 for _, row in reeval_df.iterrows():
                     reeval_idx = row['idx']
                     # Find the corresponding row in original_raw
-                    if reeval_idx in original_raw['idx'].values:
+                    idx_series = original_raw['idx']
+                    if reeval_idx in idx_series.tolist():
                         mask = original_raw['idx'] == reeval_idx
                         original_raw.loc[mask, 'response'] = row['response']
                         original_raw.loc[mask, 'error'] = row['error']
@@ -757,6 +761,10 @@ Example usage:
 
     logger.info(f"Loading input data from {args.input_filepath}")
     input_df = pd.read_pickle(args.input_filepath)
+
+    # Ensure input_df is a DataFrame, not a Series
+    if not isinstance(input_df, pd.DataFrame):
+        parser.error(f"Input file must contain a DataFrame, got {type(input_df)}")
 
     # Apply sampling if requested
     if args.max_rows is not None and args.max_rows < len(input_df):
