@@ -78,7 +78,7 @@ class SafetyEvaluator:
         output_dir: str = "./results/safety_evaluation",
         nick_name: str = "safety_judge",
         eval_model: str = "gpt-5-mini-2025-08-07",  # Model identifier for the API provider
-        # API client to use ("openai", "deepseek", "togetherai", "openrouter")
+        # API client to use ("openai", "deepseek", "togetherai", "openrouter", "deepinfra")
         client_name: str = "openai",
         temperature: float = 0.0,  # Low temperature for consistent evaluation
         max_tokens: int = 256,
@@ -99,7 +99,7 @@ class SafetyEvaluator:
             cybersecurity_label: Label for the cybersecurity category
             bioterrorism_label: Label for the bioterrorism category
             eval_model: Model identifier for the API provider (e.g., "gpt-4o-mini" for OpenAI)
-            client_name: API client to use ("openai", "deepseek", "togetherai", "openrouter")
+            client_name: API client to use ("openai", "deepseek", "togetherai", "openrouter", "deepinfra")
             temperature: Temperature for evaluation model (0.0 for deterministic)
             max_tokens: Maximum tokens for evaluation response
         """
