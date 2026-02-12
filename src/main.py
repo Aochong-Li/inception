@@ -51,7 +51,7 @@ TARGET_MODEL_INSTRUCT_TEMPLATE = {
     "deepseek-ai/DeepSeek-V3.2": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜>{reasoning}''',
     "Qwen/Qwen3-235B-A22B-Instruct-2507": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n{reasoning}''',
     "Qwen/Qwen3-Next-80B-A3B-Instruct": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n{reasoning}''',
-    "moonshotai/Kimi-K2-Thinking": "<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|>\n<|im_user|>user<|im_middle|>{inquiry}<|im_end|><|im_assistant|>assistant<|im_middle|>{reasoning}",
+    "moonshotai/Kimi-K2-Instruct-0905": "<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|>\n<|im_user|>user<|im_middle|>{inquiry}<|im_end|><|im_assistant|>assistant<|im_middle|>{reasoning}",
     "zai-org/GLM-4.6": "[gMASK]<sop><|user|>\n{inquiry}<|assistant|>\n<think></think>\n{reasoning}"
 }
 
@@ -109,8 +109,11 @@ class InceptionEngine:
         self.min_reasoning_tokens = min_reasoning_tokens
         self.overwrite = overwrite
         self.client_name = client_name
-
-        self.output_dir = os.path.join(self.results_dir, 'think' if not self.instruct else 'instruct', f"max_iterations_{self.max_iterations}")
+        
+        if self.architect_initial_max_tokens == 256:
+            self.output_dir = os.path.join(self.results_dir, f"max_iterations_{self.max_iterations}", 'think' if not self.instruct else 'instruct')
+        else:
+            self.output_dir = os.path.join(self.results_dir, f"max_iterations_{self.max_iterations}", 'think' if not self.instruct else 'instruct', f"architect_initial_max_tokens_{self.architect_initial_max_tokens}")
         os.makedirs(self.output_dir, exist_ok=True)
         
         out_pickle = os.path.join(self.output_dir, f"{self.target_nick_name}.pickle")
@@ -346,7 +349,6 @@ if __name__=="__main__":
                         help="Instruct mode: inject into assistant response instead of <think> block")
 
     args = parser.parse_args()
-    
     engine = InceptionEngine(
         **vars(args),
     )

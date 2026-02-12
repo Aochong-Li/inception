@@ -40,7 +40,6 @@ echo "$TARGET_MODELS_INFO" | while IFS=, read -r TARGET_MODEL_NAME TARGET_NICK_N
     --max_iterations ${MAX_ITERATIONS} \
     --temperature 0.6 \
     --top_p 1.0 \
-    --sample_size 10 \
     --client_name "${CLIENT_NAME}" \
     --instruct
 done
