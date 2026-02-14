@@ -21,7 +21,7 @@ for model in data['think_models']:
     print(f\"{model['model_name']},{model['nick_name']},{model['client_name']}\")
 ")
 MAX_ITERATIONS=1
-ARCHITECT_INITIAL_MAX_TOKENS=(128 512 768 1024)
+ARCHITECT_INITIAL_MAX_TOKENS=(512 768 1024)
 echo "$TARGET_MODELS_INFO" | while IFS=, read -r TARGET_MODEL_NAME TARGET_NICK_NAME CLIENT_NAME; do
     for ARCHITECT_INITIAL_MAX_TOKEN in ${ARCHITECT_INITIAL_MAX_TOKENS[@]}; do
         python src/main.py \

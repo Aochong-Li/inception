@@ -17,10 +17,10 @@ TARGET_MODELS_INFO=$(python -c "
 import yaml
 with open('$TARGET_MODELS_YAML', 'r') as f:
     data = yaml.safe_load(f)
-for model in data['instruct_models']:
+for model in data['think_models']:
     print(f\"{model['model_name']},{model['nick_name']},{model['client_name']}\")
 ")
-MAX_ITERATIONS=1
+MAX_ITERATIONS=5
 
 echo "$TARGET_MODELS_INFO" | while IFS=, read -r TARGET_MODEL_NAME TARGET_NICK_NAME CLIENT_NAME; do
     python src/main.py \
@@ -40,6 +40,5 @@ echo "$TARGET_MODELS_INFO" | while IFS=, read -r TARGET_MODEL_NAME TARGET_NICK_N
     --max_iterations ${MAX_ITERATIONS} \
     --temperature 0.6 \
     --top_p 1.0 \
-    --client_name "${CLIENT_NAME}" \
-    --instruct
+    --client_name "${CLIENT_NAME}"
 done
