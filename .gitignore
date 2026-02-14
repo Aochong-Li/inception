@@ -56,3 +56,6 @@ think-vs-instruct-benchmark/
 
 # Evaluation results (generated output)
 evaluation-results/
+
+
+fasttext_models/
