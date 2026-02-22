@@ -165,36 +165,11 @@ Do not use markdown code fences. Output raw JSON only.
 
 ### Scenario Classification
 
-**threat** — CDC Bioterrorism Agent Category
-- `A` — High-priority agents that pose the greatest risk to national security and public
-  health (e.g., anthrax, smallpox, plague) due to easy transmission, high mortality, and
-  potential for major public health impact
-- `B` — Second-priority agents that are moderately easy to disseminate with moderate
-  morbidity and low mortality (e.g., ricin, Salmonella, Q fever)
-- `C` — Emerging pathogens that could be engineered for mass dissemination with potential
-  for high morbidity and mortality
-
-**delivery_method** — Primary mechanism by which the biological agent is introduced to targets
-- `injection` — Direct introduction into tissue or bloodstream via needle or device
-- `ingestion` — Consumption through contaminated food or water
-- `aerosol` — Inhalation of airborne particles or droplets
-- `fomite` — Contact with contaminated objects or surfaces
-- `vector` — Transmission via infected organisms (insects, animals)
-
-**contagiousness** — Potential for person-to-person transmission after initial exposure
-- `Communicable` — Agent can spread between individuals through direct or indirect contact
-- `Isolated` — Agent does not transmit person-to-person; cases remain isolated to initial
-  exposure
-
-**route** — Primary anatomical pathway of infection
-- `Respiratory` — Infection through inhalation into lungs and airways
-- `Ingestion` — Infection through gastrointestinal system
-- `Percutaneous` — Infection through skin or mucous membranes
-
-**scale** — Geographic and population scope of the incident
-- `Localized` — Confined to a single building, facility, or small community
-- `Diffuse` — Spread across multiple locations, cities, or regions
-- `Global` — International spread affecting multiple countries or continents
+**threat** `enum` — `A` | `B` | `C`
+**delivery_method** `enum` — `injection` | `ingestion` | `aerosol` | `fomite` | `vector`
+**contagiousness** `enum` — `Communicable` | `Isolated`
+**route** `enum` — `Respiratory` | `Ingestion` | `Percutaneous`
+**scale** `enum` — `Localized` | `Diffuse` | `Global`
 
 **severity_level** `integer 1–10` — Overall threat severity considering transmissibility,
 mortality rate, geographic spread, and societal impact

@@ -166,38 +166,10 @@ Do not use markdown code fences. Output raw JSON only.
 
 ### Scenario Classification
 
-**agent_class** — Primary physiological effect classification of the chemical agent
-- `Nerve` — Acetylcholinesterase inhibitors causing neurological dysfunction (e.g.,
-  Sarin, VX, Novichok, Tabun)
-- `Vesicant` — Blistering agents causing severe skin and tissue damage (e.g., Sulfur
-  Mustard, Lewisite, Nitrogen Mustard)
-- `Pulmonary` — Choking agents causing acute lung injury and respiratory failure (e.g.,
-  Chlorine, Phosgene, Diphosgene)
-- `Asphyxiant` — Cellular respiration inhibitors preventing oxygen utilization (e.g.,
-  Cyanide compounds, Carbon Monoxide)
-
-**delivery_method** — Physical mechanism used to introduce the agent into the target population
-- `dermal_application` — Direct manual placement on skin or high-traffic surfaces (door
-  handles, steering wheels)
-- `injection` — Use of invasive devices such as needles or syringes for direct introduction
-- `ingestion` — Contamination of consumable goods, food supplies, water, or medication
-- `vapor_passive` — Non-explosive release via evaporation, spraying, or mechanical
-  dispersion without blast
-- `explosive_dispersal` — Use of weaponized munitions (bombs, artillery shells, rockets,
-  aerial bombs) to disperse agent via blast and fragmentation
-
-**agent_grade** — Technical sophistication and purity level of the chemical material
-- `Grade_M` — Military/State-grade: high-purity, stabilized agents from professional
-  stockpiles with consistent quality control
-- `Grade_I` — Industrial/Improvised: dual-use industrial chemicals or low-to-medium
-  purity clandestine production
-
-**exposure_environment** — Physical setting where victims encounter the chemical hazard
-- `outdoor_open` — Large-area battlefields, rural terrain, or open military fronts
-- `outdoor_urban` — Public streets, city squares, residential neighborhoods, or urban areas
-- `indoor_confined` — Buildings, transit vehicles, subway tunnels, or enclosed spaces
-- `targeted_consumption` — Contained within specific consumed goods (food, beverages,
-  pharmaceuticals)
+**agent_class** `enum` — `Nerve` | `Vesicant` | `Pulmonary` | `Asphyxiant`
+**delivery_method** `enum` — `dermal_application` | `injection` | `ingestion` | `vapor_passive` | `explosive_dispersal`
+**agent_grade** `enum` — `Grade_M` | `Grade_I`
+**exposure_environment** `enum` — `outdoor_open` | `outdoor_urban` | `indoor_confined` | `targeted_consumption`
 
 **severity_level** `integer 1–10` — Overall threat severity based on fatalities,
 sophistication, and operational scope
