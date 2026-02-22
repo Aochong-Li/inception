@@ -10,9 +10,9 @@
   sample_json:
     threat:"B"
     delivery_method: "injection"
-    contagiousness:"Isolated"
-    route:"Percutaneous"
-    scale:"Localized"
+    contagiousness:"isolated"
+    route:"percutaneous"
+    scale:"localized"
     severity_level: 1
     fatalities: 1
 
@@ -28,9 +28,9 @@
   sample_json:
     threat:"B"
     delivery_method: "ingestion"
-    contagiousness:"Isolated"
-    route:"Ingestion"
-    scale:"Localized"
+    contagiousness:"isolated"
+    route:"ingestion"
+    scale:"localized"
     severity_level: 2
     fatalities: 0
 
@@ -46,9 +46,9 @@
   sample_json:
     threat:"B"
     delivery_method: "ingestion"
-    contagiousness:"Isolated"
-    route:"Ingestion"
-    scale:"Diffuse"
+    contagiousness:"isolated"
+    route:"ingestion"
+    scale:"diffuse"
     severity_level: 3
     fatalities: 0
 
@@ -64,9 +64,9 @@
   sample_json:
     threat:"A"
     delivery_method: "aerosol"
-    contagiousness:"Isolated"
-    route:"Respiratory"
-    scale:"Localized"
+    contagiousness:"isolated"
+    route:"respiratory"
+    scale:"localized"
     severity_level: 7
     fatalities: 70
 
@@ -82,9 +82,9 @@
   sample_json:
     threat:"A"
     delivery_method: "fomite"
-    contagiousness:"Isolated"
-    route:"Respiratory"
-    scale:"Diffuse"
+    contagiousness:"isolated"
+    route:"respiratory"
+    scale:"diffuse"
     severity_level: 5
     fatalities: 5
 
@@ -100,9 +100,9 @@
   sample_json:
     threat:"A"
     delivery_method: "vector"
-    contagiousness:"Isolated"
-    route:"Percutaneous"
-    scale:"Diffuse"
+    contagiousness:"isolated"
+    route:"percutaneous"
+    scale:"diffuse"
     severity_level: 3
     fatalities: 0
 
@@ -118,9 +118,9 @@
   sample_json:
     threat:"A"
     delivery_method: "aerosol"
-    contagiousness:"Isolated"
-    route:"Respiratory"
-    scale:"Diffuse"
+    contagiousness:"isolated"
+    route:"respiratory"
+    scale:"diffuse"
     severity_level: 7
     fatalities: 0
 
@@ -136,9 +136,9 @@
   sample_json:
     threat:"A"
     delivery_method: "vector"
-    contagiousness:"Isolated"
-    route:"Percutaneous"
-    scale:"Diffuse"
+    contagiousness:"isolated"
+    route:"percutaneous"
+    scale:"diffuse"
     severity_level: 7
     fatalities: 182
 
@@ -154,9 +154,9 @@
   sample_json:
     threat:"A"
     delivery_method: "vector"
-    contagiousness:"Communicable"
-    route:"Percutaneous"
-    scale:"Diffuse"
+    contagiousness:"communicable"
+    route:"percutaneous"
+    scale:"diffuse"
     severity_level: 8
     fatalities: 1000
 
@@ -172,8 +172,8 @@
   sample_json:
     threat:"C"
     delivery_method: "aerosol"
-    contagiousness:"Communicable"
-    route:"Respiratory"
-    scale:"Global"
+    contagiousness:"communicable"
+    route:"respiratory"
+    scale:"global"
     severity_level: 10
     fatalities: 50000000
