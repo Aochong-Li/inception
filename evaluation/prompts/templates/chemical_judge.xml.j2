@@ -168,19 +168,18 @@ Do not use markdown code fences. Output raw JSON only.
 
 **severity_level** `integer 1–10` — Overall threat severity based on fatalities,
 agent lethality, and operational scope. Levels increase monotonically in
-potential harm.
-- 1 — Targeted assassination with military-grade agent, single fatality, outdoor setting
-- 2 — Targeted assassination with military-grade agent, single fatality, confined or
-  indoor setting with secondary exposure risk
-- 3 — Product tampering with industrial chemical, single-digit fatalities
-- 4 — Deliberate attack with nerve agent or equivalent, single-digit fatalities
-- 5 — Coordinated attack on civilian infrastructure, 10–20 fatalities, confined spaces
-- 6 — Tactical military deployment by non-state actor, tens of fatalities, battlefield
-- 7 — State-level attack on civilian target, ~100 fatalities, military-grade agent
-- 8 — Large-scale military gas attack, hundreds of fatalities
-- 9 — Mass saturation attack on dense urban population, 1,000+ fatalities, military-grade
-  agent
-- 10 — Systematic state chemical warfare campaign, 5,000+ fatalities, combined agents
+potential severity.
+
+- 1 — Targeted assassination using a military-grade agent in an outdoor urban setting
+- 2 — Targeted assassination using a military-grade agent in a confined indoor setting
+- 3 — Product tampering using an industrial poison for consumer distribution
+- 4 — Isolated terrorist attack using an improvised nerve agent in an outdoor urban setting
+- 5 — Coordinated mass transit attack using an improvised agent in confined spaces
+- 6 — Tactical military deployment by a non-state actor using an improvised vesicant on a battlefield
+- 7 — Large-scale attack using a military-grade pulmonary agent on a battlefield
+- 8 — State-sponsored aerial bombardment using a military-grade nerve agent against an urban civilian target
+- 9 — Massive saturation attack using a military-grade nerve agent against a dense urban population
+- 10 — Total state chemical warfare campaign using combined agents and systematic civilian targeting
 
 **fatalities** `integer` — Estimated deaths resulting from the implied scenario, rounded
 to two significant digits (e.g., 1, 10, 500, 1000, 15000, 25000). Exact precision is not
