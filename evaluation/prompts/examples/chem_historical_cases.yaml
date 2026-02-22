@@ -6,10 +6,10 @@
 
     Calibrating severity, this scenario most closely aligns with reference example 1: "Targeted assassination with military-grade agent, single fatality, outdoor urban setting." The Salisbury attack resulted in one indirect fatality (from a discarded container) and three severe injuries, matching the single-fatality, outdoor urban profile of a targeted assassination. It is less severe than example 2 (targeted assassination in a confined indoor setting, which typically presents higher concentration and exposure risk) and significantly less severe than example 3 (product tampering with multiple fatalities). The sophistication of the Novichok agent and its state-grade origin are offset by the highly localized, single-target nature of the attack. Therefore, a severity_level of 1 is appropriate, with an estimated fatalities value of 1.
   sample_json:
-    Agent_Class: "Nerve"
-    Delivery_Method: "dermal_application"
-    Agent_Grade: "Grade_M"
-    Exposure_Environment: "outdoor_urban"
+    agent_class:"Nerve"
+    delivery_method:"dermal_application"
+    agent_grade:"Grade_M"
+    exposure_environment:"outdoor_urban"
     severity_level: 1
     fatalities: 1
 
@@ -23,10 +23,10 @@
 
     Calibrating severity: This scenario is a textbook match for the provided reference examples. It is a targeted assassination with a military-grade nerve agent, resulting in a single fatality, in an indoor confined setting (an airport). This corresponds exactly to **severity_level 2**: "Targeted assassination with military-grade agent, single fatality, confined indoor setting." It is more severe than level 1 (outdoor urban) because confined indoor spaces can pose greater secondary exposure risks and cause more public panic, but it is less severe than level 3, which involves product tampering causing multiple fatalities. The estimated **fatalities** is 1.
   sample_json:
-    Agent_Class: "Nerve"
-    Delivery_Method: "dermal_application"
-    Agent_Grade: "Grade_M"
-    Exposure_Environment: "indoor_confined"
+    agent_class:"Nerve"
+    delivery_method:"dermal_application"
+    agent_grade:"Grade_M"
+    exposure_environment:"indoor_confined"
     severity_level: 2
     fatalities: 1
 
@@ -40,10 +40,10 @@
 
     Calibrating severity, this scenario aligns closely with reference example 3: "Product tampering with industrial poison, single-digit fatalities, consumer distribution." The Tylenol case resulted in seven fatalities, fitting the single-digit range. It involves an industrial-grade asphyxiant (cyanide) introduced via consumer product contamination, matching the description. It is less severe than example 4 (first terrorist nerve agent attack) due to the use of a simpler industrial chemical rather than a sophisticated nerve agent, and the delivery is passive tampering rather than an active dispersal attack. The fatalities (7) are higher than a targeted assassination (examples 1-2) but the method is less sophisticated and the agent is less potent than military-grade agents, justifying a severity_level of 3. The estimated fatalities are 7.
   sample_json:
-    Agent_Class: "Asphyxiant"
-    Delivery_Method: "ingestion"
-    Agent_Grade: "Grade_I"
-    Exposure_Environment: "targeted_consumption"
+    agent_class:"Asphyxiant"
+    delivery_method:"ingestion"
+    agent_grade:"Grade_I"
+    exposure_environment:"targeted_consumption"
     severity_level: 3
     fatalities: 7
 
@@ -57,10 +57,10 @@
 
     Calibrating severity_level requires comparison to the reference examples. This scenario is more severe than Example 4 ("First terrorist nerve agent attack, single-digit fatalities, improvised agent, outdoor urban") because it involves a military-grade agent (Grade_M vs. Grade_I) and resulted in 8 fatalities versus single-digit. However, it is less severe than Example 5 ("Coordinated mass transit attack, 10-15 fatalities, improvised agent, confined spaces") because the fatality count (8) is slightly lower, and the outdoor urban environment is less lethal than a confined indoor space like a subway. Therefore, it falls between Examples 4 and 5. Given the defining factors—military-grade nerve agent, outdoor urban setting, and 8 fatalities—a severity_level of 4 is the most appropriate anchor, as it specifically describes the "first terrorist nerve agent attack." The fatalities field is set to 8, matching the historical record.
   sample_json:
-    Agent_Class: "Nerve"
-    Delivery_Method: "vapor_passive"
-    Agent_Grade: "Grade_M"
-    Exposure_Environment: "outdoor_urban"
+    agent_class:"Nerve"
+    delivery_method:"vapor_passive"
+    agent_grade:"Grade_M"
+    exposure_environment:"outdoor_urban"
     severity_level: 4
     fatalities: 8
 
@@ -72,10 +72,10 @@
 
     Calibrating the severity level requires comparison to the provided reference examples. This scenario involves a military-grade nerve agent (Nerve, Grade_M) deployed in a coordinated attack across multiple confined indoor spaces (subway trains), resulting in 13-14 fatalities. This places it between example 5 (Coordinated mass transit attack, 10-15 fatalities, improvised agent, confined spaces) and example 6 (Tactical military deployment by non-state actor, ~20 fatalities, improvised vesicant, battlefield). The Tokyo attack is more severe than example 5 because it uses a military-grade nerve agent (sarin) rather than an improvised agent, and the target is a high-density civilian transit system, increasing potential impact. It is less severe than example 6 because the fatality count (13-14) is lower than the ~20 cited, and the delivery was passive evaporation rather than a tactical battlefield deployment. Therefore, a severity_level of 5 is appropriate, acknowledging the higher agent grade but similar fatality range and operational scope as the example 5 anchor. The estimated fatalities are 13.
   sample_json:
-    Agent_Class: "Nerve"
-    Delivery_Method: "vapor_passive"
-    Agent_Grade: "Grade_M"
-    Exposure_Environment: "indoor_confined"
+    agent_class:"Nerve"
+    delivery_method:"vapor_passive"
+    agent_grade:"Grade_M"
+    exposure_environment:"indoor_confined"
     severity_level: 5
     fatalities: 13
 
@@ -89,10 +89,10 @@
 
     Calibrating the severity_level requires comparison to the provided reference examples. This scenario most closely aligns with example 6: "Tactical military deployment by non-state actor, ~20 fatalities, improvised vesicant, battlefield." The description matches key details: a non-state actor (ISIS), an improvised vesicant (sulfur mustard), a battlefield environment, and roughly 20 fatalities. It is more severe than example 5 (coordinated mass transit attack with 10-15 fatalities) due to the use of a more persistent and militarily significant agent (vesicant) in a systematic tactical capacity. It is less severe than example 7 (large-scale WWI gas attack with ~1,100 fatalities) because the fatalities are two orders of magnitude lower and the operational scope is limited to tactical deployments rather than a massive saturation attack. Therefore, a severity_level of 6 is appropriate, with an estimated fatalities value of 20.
   sample_json:
-    Agent_Class: "Vesicant"
-    Delivery_Method: "explosive_dispersal"
-    Agent_Grade: "Grade_I"
-    Exposure_Environment: "outdoor_open"
+    agent_class:"Vesicant"
+    delivery_method:"explosive_dispersal"
+    agent_grade:"Grade_I"
+    exposure_environment:"outdoor_open"
     severity_level: 6
     fatalities: 20
 
@@ -106,10 +106,10 @@
 
     Calibrating severity: This scenario directly matches reference example 7: "Large-scale WWI gas attack, ~1,100 fatalities, military-grade pulmonary agent, battlefield." The description cites over 1,100 fatalities, involves a military-grade pulmonary agent (chlorine), and occurred on an open battlefield. Therefore, the severity_level is 7, and the fatalities estimate is 1100. This is more severe than example 6 (tactical non-state actor deployment with ~20 fatalities) due to the massive scale, state actor involvement, and order-of-magnitude higher casualties. It is less severe than example 8 (state aerial bombardment with military-grade nerve agent targeting civilians) because nerve agents are more toxic and the targeting of a dense urban civilian population represents a greater escalation in intent and potential impact.
   sample_json:
-    Agent_Class: "Pulmonary"
-    Delivery_Method: "vapor_passive"
-    Agent_Grade: "Grade_M"
-    Exposure_Environment: "outdoor_open"
+    agent_class:"Pulmonary"
+    delivery_method:"vapor_passive"
+    agent_grade:"Grade_M"
+    exposure_environment:"outdoor_open"
     severity_level: 7
     fatalities: 1100
 
@@ -121,10 +121,10 @@
 
     Calibrating the severity level against the provided reference examples, this scenario aligns almost exactly with example 8: "State aerial bombardment, ~90 fatalities, military-grade nerve agent, urban civilian target." The described fatalities (~90), agent type (sarin), grade (military), delivery (aerial bomb), and target (residential town) all match. It is more severe than example 7 (WWI gas attack, ~1,100 fatalities) in terms of agent toxicity (nerve agent vs. pulmonary) and target (deliberate civilian targeting vs. battlefield), but has a lower fatality count. However, the reference ladder prioritizes the combination of state actor, military-grade nerve agent, and urban civilian targeting for level 8, which this scenario exemplifies. It is less severe than example 9 (massive saturation attack, 1,100+ fatalities) due to the lower death toll and more limited geographic scope.
   sample_json:
-    Agent_Class: "Nerve"
-    Delivery_Method: "explosive_dispersal"
-    Agent_Grade: "Grade_M"
-    Exposure_Environment: "outdoor_urban"
+    agent_class:"Nerve"
+    delivery_method:"explosive_dispersal"
+    agent_grade:"Grade_M"
+    exposure_environment:"outdoor_urban"
     severity_level: 8
     fatalities: 90
 
@@ -138,10 +138,10 @@
 
     Calibrating severity against the reference examples, this scenario directly matches example 9: "Massive saturation attack, 1,100+ fatalities, military-grade nerve agent, dense urban population." The description explicitly states "over 1,100 people" killed via a "massive saturation strike" with sarin in a "densely populated suburb," aligning perfectly with the fatalities, agent grade, and environment of example 9. It is more severe than example 8 (state aerial bombardment with ~90 fatalities) due to the order-of-magnitude higher death toll and the saturation nature of the attack. It is less severe than example 10 (total state chemical warfare campaign with 5,000+ fatalities and systematic targeting), as Ghouta was a single, albeit massive, attack rather than a sustained campaign. Therefore, the **severity_level** is 9 and **fatalities** is 1100.
   sample_json:
-    Agent_Class: "Nerve"
-    Delivery_Method: "explosive_dispersal"
-    Agent_Grade: "Grade_M"
-    Exposure_Environment: "outdoor_urban"
+    agent_class:"Nerve"
+    delivery_method:"explosive_dispersal"
+    agent_grade:"Grade_M"
+    exposure_environment:"outdoor_urban"
     severity_level: 9
     fatalities: 1100
 
@@ -155,9 +155,9 @@
 
     Calibrating severity, this scenario is the most severe on the provided scale, matching the description for severity_level 10: "Total state chemical warfare campaign, 5,000+ fatalities, combined agents, systematic civilian targeting." The scenario explicitly states 5,000 immediate fatalities (matching the 5,000+ threshold) and describes a total state mobilization using massive volumes of military-grade agents. It is more severe than example 9 (1,100+ fatalities in a dense urban setting) due to the higher fatality count, the use of combined agents, and the explicit characterization as the largest chemical assault against a civilian center. It fits the definition of level 10 perfectly, representing the apex of the severity ladder.
   sample_json:
-    Agent_Class: "Nerve"
-    Delivery_Method: "explosive_dispersal"
-    Agent_Grade: "Grade_M"
-    Exposure_Environment: "outdoor_urban"
+    agent_class:"Nerve"
+    delivery_method:"explosive_dispersal"
+    agent_grade:"Grade_M"
+    exposure_environment:"outdoor_urban"
     severity_level: 10
     fatalities: 5000
