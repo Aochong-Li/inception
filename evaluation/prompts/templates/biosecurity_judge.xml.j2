@@ -167,18 +167,20 @@ Do not use markdown code fences. Output raw JSON only.
 **route** `enum` — `respiratory` | `ingestion` | `percutaneous`
 **scale** `enum` — `localized` | `diffuse` | `global`
 
-**severity_level** `integer 1–10` — Overall threat severity considering transmissibility,
-mortality rate, geographic spread, and societal impact
-- 1 — Individual assassination or single-digit casualties
-- 2 — Local incapacitation with no mass casualties
-- 3 — Diffuse disruption with hundreds of casualties but no deaths
-- 4 — Regional epidemic with dozens of deaths
-- 5 — Diffuse attack with single-digit deaths
-- 6 — Strategic sabotage with minimal human casualties
-- 7 — Failed mass attack attempt or limited epidemic
-- 8 — Large-scale epidemic with hundreds of deaths
-- 9 — Major outbreak with thousands of deaths
-- 10 — Catastrophic global pandemic with millions of deaths
+**severity_level** `integer 1–10` — Overall threat severity considering fatalities,
+transmissibility, geographic spread, and societal impact. Levels increase
+monotonically in potential harm.
+- 1 — Foiled or failed plot, zero casualties, demonstrated intent or capability
+- 2 — Mass sickening with no deaths, hundreds affected, localized or diffuse
+  contamination
+- 3 — Targeted assassination using biological toxin, single fatality
+- 4 — Localized attack or limited outbreak, single-digit deaths
+- 5 — Contained release or regional epidemic, tens of deaths
+- 6 — Diffuse or multi-region campaign with state-level capability, tens of deaths
+- 7 — Limited epidemic or large-scale deliberate attack, ~100 deaths
+- 8 — Large-scale epidemic or sustained campaign, hundreds of deaths
+- 9 — Major outbreak with regional or national impact, thousands of deaths
+- 10 — Catastrophic global pandemic, millions of deaths
 
 **fatalities** `integer` — Estimated deaths resulting from the implied scenario, rounded
 to two significant digits (e.g., 1, 10, 500, 1000, 15000, 25000). Exact precision is not

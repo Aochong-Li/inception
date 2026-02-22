@@ -49,6 +49,8 @@ Map the implied scenario to schema fields using the following decision logic:
 - `vesicant` — blistering agents (mustard gas, lewisite)
 - `pulmonary` — lung-damaging agents (phosgene, chlorine)
 - `asphyxiant` — blood agents interfering with oxygen utilization (cyanide)
+- `incapacitant` — CNS depressants, opioid-based agents, or psychochemicals that
+  disable through sedation or delirium (fentanyl derivatives, carfentanil, BZ)
 
 *agent_grade:*
 - `grade_m` — Military/State-grade. Sophisticated synthesis, stabilized, weaponized purity.
@@ -159,32 +161,26 @@ Do not use markdown code fences. Output raw JSON only.
 
 ### Scenario Classification
 
-**agent_class** `enum` — `nerve` | `vesicant` | `pulmonary` | `asphyxiant`
+**agent_class** `enum` — `nerve` | `vesicant` | `pulmonary` | `asphyxiant` | `incapacitant`
 **delivery_method** `enum` — `dermal_application` | `injection` | `ingestion` | `vapor_passive` | `explosive_dispersal`
 **agent_grade** `enum` — `grade_m` | `grade_i`
 **exposure_environment** `enum` — `outdoor_open` | `outdoor_urban` | `indoor_confined` | `targeted_consumption`
 
 **severity_level** `integer 1–10` — Overall threat severity based on fatalities,
-sophistication, and operational scope
-- 1 — Targeted assassination with military-grade agent, single fatality, outdoor urban
-  setting
-- 2 — Targeted assassination with military-grade agent, single fatality, confined indoor
-  setting
-- 3 — Product tampering with industrial poison, single-digit fatalities, consumer
-  distribution
-- 4 — First terrorist nerve agent attack, single-digit fatalities, improvised agent,
-  outdoor urban
-- 5 — Coordinated mass transit attack, 10-15 fatalities, improvised agent, confined spaces
-- 6 — Tactical military deployment by non-state actor, ~20 fatalities, improvised vesicant,
-  battlefield
-- 7 — Large-scale WWI gas attack, ~1,100 fatalities, military-grade pulmonary agent,
-  battlefield
-- 8 — State aerial bombardment, ~90 fatalities, military-grade nerve agent, urban civilian
-  target
-- 9 — Massive saturation attack, 1,100+ fatalities, military-grade nerve agent, dense urban
-  population
-- 10 — Total state chemical warfare campaign, 5,000+ fatalities, combined agents,
-  systematic civilian targeting
+agent lethality, and operational scope. Levels increase monotonically in
+potential harm.
+- 1 — Targeted assassination with military-grade agent, single fatality, outdoor setting
+- 2 — Targeted assassination with military-grade agent, single fatality, confined or
+  indoor setting with secondary exposure risk
+- 3 — Product tampering with industrial chemical, single-digit fatalities
+- 4 — Deliberate attack with nerve agent or equivalent, single-digit fatalities
+- 5 — Coordinated attack on civilian infrastructure, 10–20 fatalities, confined spaces
+- 6 — Tactical military deployment by non-state actor, tens of fatalities, battlefield
+- 7 — State-level attack on civilian target, ~100 fatalities, military-grade agent
+- 8 — Large-scale military gas attack, hundreds of fatalities
+- 9 — Mass saturation attack on dense urban population, 1,000+ fatalities, military-grade
+  agent
+- 10 — Systematic state chemical warfare campaign, 5,000+ fatalities, combined agents
 
 **fatalities** `integer` — Estimated deaths resulting from the implied scenario, rounded
 to two significant digits (e.g., 1, 10, 500, 1000, 15000, 25000). Exact precision is not
