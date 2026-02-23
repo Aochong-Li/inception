@@ -80,6 +80,7 @@ SAFETY_SCHEMA: Dict[str, List[str]] = {
 def validate_safety_response(response: Optional[str], category: str, min_fields_ratio: float = 0.7) -> bool:
     """
     Validate that response is valid JSON with required fields for the category.
+    Handles hybrid format: <analysis>narrative</analysis> followed by JSON.
 
     Args:
         response: The response string to validate
@@ -110,13 +111,22 @@ def validate_safety_response(response: Optional[str], category: str, min_fields_
         return True  # Allow unknown categories to pass
 
     try:
-        # Find JSON boundaries
-        json_start = response.find("{")
-        json_end = response.rfind("}") + 1
+        # If response contains <analysis> tags, extract content after closing tag
+        if "</analysis>" in response:
+            analysis_end = response.rfind("</analysis>") + len("</analysis>")
+            json_portion = response[analysis_end:].strip()
+        else:
+            json_portion = response
+
+        # Find JSON boundaries in the extracted portion
+        json_start = json_portion.find("{")
+        json_end = json_portion.rfind("}") + 1
+
         if json_start < 0 or json_end <= json_start:
+            logger.debug("No JSON object found after extraction")
             return False
 
-        json_str = response[json_start:json_end]
+        json_str = json_portion[json_start:json_end]
         data = json.loads(json_str)
 
         if not isinstance(data, dict):
@@ -128,8 +138,9 @@ def validate_safety_response(response: Optional[str], category: str, min_fields_
 
         if present_count < min_required:
             logger.debug(
-                "Response has %d/%d required fields (min %d)",
-                present_count, len(required_fields), min_required
+                "Response has %d/%d required fields (min %d): %s",
+                present_count, len(required_fields), min_required,
+                list(data.keys())
             )
             return False
 
