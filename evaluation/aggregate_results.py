@@ -13,15 +13,14 @@ from pathlib import Path
 import pandas as pd
 
 _script_dir = Path(__file__).parent.resolve()
-RESULTS_DIR = _script_dir / "results"
-CUMULATIVE_DIR = RESULTS_DIR / "cumulative"
+DEFAULT_RESULTS_DIR = _script_dir / "results"
 
 # Schema definitions
-CHEM_CATEGORICAL = ["attack_vector", "sophistication", "requires_government_intervention"]
-CHEM_NUMERIC = ["severity_level", "actor_count", "cost_usd", "economic_damage_usd"]
+CHEM_CATEGORICAL = ["agent_class", "delivery_method", "agent_grade", "exposure_environment"]
+CHEM_NUMERIC = ["severity_level", "fatalities", "specificity", "convincingness"]
 
-BIO_CATEGORICAL = ["delivery_method", "material_access", "requires_government_intervention"]
-BIO_NUMERIC = ["severity_level", "actor_count", "cost_usd", "fatalities", "injured", "economic_damage_usd"]
+BIO_CATEGORICAL = ["threat", "delivery_method", "contagiousness", "route", "scale"]
+BIO_NUMERIC = ["severity_level", "fatalities", "specificity", "convincingness"]
 
 
 def compute_frequency_dict(series: pd.Series) -> dict:
@@ -65,15 +64,19 @@ def aggregate_model_results(df: pd.DataFrame, category: str) -> dict:
     return result
 
 
-def aggregate_all_models():
+def aggregate_all_models(results_dir: Path = None):
     """Aggregate results from all models."""
-    CUMULATIVE_DIR.mkdir(parents=True, exist_ok=True)
+    if results_dir is None:
+        results_dir = DEFAULT_RESULTS_DIR
+
+    cumulative_dir = results_dir / "cumulative"
+    cumulative_dir.mkdir(parents=True, exist_ok=True)
 
     chem_results = []
     bio_results = []
 
     # Find all model result directories
-    model_dirs = [d for d in RESULTS_DIR.iterdir() if d.is_dir() and d.name != "cumulative"]
+    model_dirs = [d for d in results_dir.iterdir() if d.is_dir() and d.name != "cumulative"]
 
     for model_dir in sorted(model_dirs):
         model_name = model_dir.name
@@ -110,7 +113,7 @@ def aggregate_all_models():
         # Reorder columns to put model_name first
         cols = ["model_name"] + [c for c in chem_df.columns if c != "model_name"]
         chem_df = chem_df[cols]
-        chem_path = CUMULATIVE_DIR / "chem_evaluator_results.pickle"
+        chem_path = cumulative_dir / "chem_evaluator_results.pickle"
         chem_df.to_pickle(chem_path)
         print(f"\nSaved chem results: {chem_path}")
         print(f"  Models: {len(chem_df)}")
@@ -121,7 +124,7 @@ def aggregate_all_models():
         # Reorder columns to put model_name first
         cols = ["model_name"] + [c for c in bio_df.columns if c != "model_name"]
         bio_df = bio_df[cols]
-        bio_path = CUMULATIVE_DIR / "bio_evaluator_results.pickle"
+        bio_path = cumulative_dir / "bio_evaluator_results.pickle"
         bio_df.to_pickle(bio_path)
         print(f"\nSaved bio results: {bio_path}")
         print(f"  Models: {len(bio_df)}")
@@ -132,13 +135,21 @@ def aggregate_all_models():
 
 def main():
     parser = argparse.ArgumentParser(description="Aggregate per-model results into cumulative files")
-    parser.parse_args()
+    parser.add_argument(
+        "--results-dir",
+        type=str,
+        default=None,
+        help="Directory containing per-model result subdirectories (default: evaluation/results)"
+    )
+    args = parser.parse_args()
+
+    results_dir = Path(args.results_dir) if args.results_dir else DEFAULT_RESULTS_DIR
 
     print("Aggregating model results...")
-    print(f"Results directory: {RESULTS_DIR}")
+    print(f"Results directory: {results_dir}")
     print()
 
-    chem_df, bio_df = aggregate_all_models()
+    chem_df, bio_df = aggregate_all_models(results_dir)
 
     print("\n" + "=" * 60)
     print("Aggregation complete!")
