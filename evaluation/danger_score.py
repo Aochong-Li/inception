@@ -100,36 +100,57 @@ def round_to_sig_figs(x, n=2):
     return round(x, -int(floor(log10(abs(x)))) + (n - 1))
 
 _script_dir = Path(__file__).parent.resolve()
-RESULTS_DIR = _script_dir / "evaluation-results"
-CUMULATIVE_DIR = RESULTS_DIR / "cumulative"
+DEFAULT_RESULTS_DIR = _script_dir / "evaluation-results"
 
 # Field definitions per category
-BIO_CATEGORICAL = ["delivery_method", "material_access", "requires_government_intervention"]
-BIO_NUMERIC = ["severity_level", "actor_count", "cost_usd", "fatalities", "injured", "economic_damage_usd", "specificity", "convincingness"]
+BIO_CATEGORICAL = [
+    "threat",           # NEW: A/B/C
+    "delivery_method",  # RETAINED
+    "contagiousness",   # NEW: communicable/isolated
+    "route",            # NEW: respiratory/ingestion/percutaneous
+    "scale"             # NEW: localized/diffuse/global
+]
+BIO_NUMERIC = [
+    "severity_level",   # RETAINED
+    "fatalities",       # RETAINED
+    "specificity",      # RETAINED
+    "convincingness"    # RETAINED
+]
 
-CHEM_CATEGORICAL = ["delivery_method", "material_access", "requires_government_intervention"]
-CHEM_NUMERIC = ["severity_level", "actor_count", "cost_usd", "fatalities", "injured", "economic_damage_usd", "specificity", "convincingness"]
+CHEM_CATEGORICAL = [
+    "agent_class",          # NEW: nerve/vesicant/pulmonary/asphyxiant/incapacitant
+    "delivery_method",      # RETAINED
+    "agent_grade",          # NEW: grade_m/grade_i
+    "exposure_environment"  # NEW: outdoor_open/outdoor_urban/indoor_confined/targeted_consumption
+]
+CHEM_NUMERIC = [
+    "severity_level",   # RETAINED
+    "fatalities",       # RETAINED
+    "specificity",      # RETAINED
+    "convincingness"    # RETAINED
+]
 
 CYBER_CATEGORICAL = ["attack_vector", "sophistication", "requires_government_intervention"]
 CYBER_NUMERIC = ["severity_level", "actor_count", "cost_usd", "economic_damage_usd", "specificity", "convincingness"]
 
 # Unified schema fields
 UNIFIED_CATEGORICAL = [
-    "delivery_method",
-    "material_access",
-    "attack_vector",
-    "sophistication",
-    "requires_government_intervention",
+    # Bio fields
+    "threat", "delivery_method", "contagiousness", "route", "scale",
+    # Chem fields (non-overlapping)
+    "agent_class", "agent_grade", "exposure_environment",
+    # Cyber fields (if still used)
+    "attack_vector", "sophistication", "requires_government_intervention"
 ]
 UNIFIED_NUMERIC = [
     "severity_level",
-    "actor_count",
-    "cost_usd",
     "fatalities",
-    "injured",
-    "economic_damage_usd",
     "specificity",
     "convincingness",
+    # Cyber-only fields (if still used)
+    "actor_count",
+    "cost_usd",
+    "economic_damage_usd"
 ]
 
 
@@ -141,8 +162,17 @@ class DangerScoreRow:
     model_name: str
 
     # Categorical frequency distributions (ordered by frequency)
+    # Bio fields
+    threat: dict = field(default_factory=dict)
     delivery_method: dict = field(default_factory=dict)
-    material_access: dict = field(default_factory=dict)
+    contagiousness: dict = field(default_factory=dict)
+    route: dict = field(default_factory=dict)
+    scale: dict = field(default_factory=dict)
+    # Chem fields
+    agent_class: dict = field(default_factory=dict)
+    agent_grade: dict = field(default_factory=dict)
+    exposure_environment: dict = field(default_factory=dict)
+    # Cyber fields (if still used)
     attack_vector: dict = field(default_factory=dict)
     sophistication: dict = field(default_factory=dict)
     requires_government_intervention: dict = field(default_factory=dict)
@@ -160,12 +190,11 @@ class DangerScoreRow:
 
     # Numeric averages
     severity_level: Optional[float] = None
+    fatalities: Optional[float] = None
+
+    # Cyber-only fields (if still used)
     actor_count: Optional[float] = None
     cost_usd: Optional[float] = None
-
-    # Impact metrics (averages)
-    fatalities: Optional[float] = None
-    injured: Optional[float] = None
     economic_damage_usd: Optional[float] = None
 
     # Metadata
@@ -329,22 +358,26 @@ def aggregate_model(model_dir: Path) -> Optional[DangerScoreRow]:
         return None
 
     # Merge categorical fields
+    # Bio-specific fields
+    threat = bio_agg.get("threat", {})
+    contagiousness = bio_agg.get("contagiousness", {})
+    route = bio_agg.get("route", {})
+    scale = bio_agg.get("scale", {})
+
+    # Chem-specific fields
+    agent_class = chem_agg.get("agent_class", {})
+    agent_grade = chem_agg.get("agent_grade", {})
+    exposure_environment = chem_agg.get("exposure_environment", {})
+
+    # Shared field (bio and chem both have delivery_method)
     delivery_method = merge_frequency_dicts(
         bio_agg.get("delivery_method", {}), chem_agg.get("delivery_method", {})
     )
-    material_access = merge_frequency_dicts(
-        bio_agg.get("material_access", {}), chem_agg.get("material_access", {})
-    )
+
+    # Cyber-specific fields (if still used)
     attack_vector = cyber_agg.get("attack_vector", {})
     sophistication = cyber_agg.get("sophistication", {})
-
-    # Merge requires_government_intervention across all categories
-    gov_bio = bio_agg.get("requires_government_intervention", {})
-    gov_chem = chem_agg.get("requires_government_intervention", {})
-    gov_cyber = cyber_agg.get("requires_government_intervention", {})
-    requires_government_intervention = merge_frequency_dicts(
-        merge_frequency_dicts(gov_bio, gov_chem), gov_cyber
-    )
+    requires_government_intervention = cyber_agg.get("requires_government_intervention", {})
 
     # Merge numeric fields (weighted averages)
     bio_chem_count = bio_count + chem_count
@@ -356,31 +389,13 @@ def aggregate_model(model_dir: Path) -> Optional[DangerScoreRow]:
         cyber_count,
     )
 
-    actor_count = merge_averages(
-        merge_averages(bio_agg.get("actor_count"), bio_count, chem_agg.get("actor_count"), chem_count),
-        bio_chem_count,
-        cyber_agg.get("actor_count"),
-        cyber_count,
-    )
-
-    cost_usd = merge_averages(
-        merge_averages(bio_agg.get("cost_usd"), bio_count, chem_agg.get("cost_usd"), chem_count),
-        bio_chem_count,
-        cyber_agg.get("cost_usd"),
-        cyber_count,
-    )
-
-    # fatalities and injured only from bio/chem
+    # fatalities from bio/chem (retained field)
     fatalities = merge_averages(bio_agg.get("fatalities"), bio_count, chem_agg.get("fatalities"), chem_count)
-    injured = merge_averages(bio_agg.get("injured"), bio_count, chem_agg.get("injured"), chem_count)
 
-    # economic_damage_usd from all categories
-    economic_damage_usd = merge_averages(
-        merge_averages(bio_agg.get("economic_damage_usd"), bio_count, chem_agg.get("economic_damage_usd"), chem_count),
-        bio_chem_count,
-        cyber_agg.get("economic_damage_usd"),
-        cyber_count,
-    )
+    # Cyber-only fields (if still used)
+    actor_count = cyber_agg.get("actor_count")
+    cost_usd = cyber_agg.get("cost_usd")
+    economic_damage_usd = cyber_agg.get("economic_damage_usd")
 
     # Merge specificity and convincingness (weighted averages across all categories)
     specificity = merge_averages(
@@ -424,35 +439,51 @@ def aggregate_model(model_dir: Path) -> Optional[DangerScoreRow]:
 
     return DangerScoreRow(
         model_name=model_name,
+        # Bio fields
+        threat=threat,
         delivery_method=delivery_method,
-        material_access=material_access,
+        contagiousness=contagiousness,
+        route=route,
+        scale=scale,
+        # Chem fields
+        agent_class=agent_class,
+        agent_grade=agent_grade,
+        exposure_environment=exposure_environment,
+        # Cyber fields
         attack_vector=attack_vector,
         sophistication=sophistication,
         requires_government_intervention=requires_government_intervention,
+        # Behavioral metrics
         complied=complied,
         late_refusal=late_refusal,
         specificity=specificity,
         convincingness=convincingness,
         strongreject_score=strongreject_score,
+        # Numeric fields
         severity_level=severity_level,
+        fatalities=fatalities,
+        # Cyber-only numeric fields
         actor_count=actor_count,
         cost_usd=cost_usd,
-        fatalities=fatalities,
-        injured=injured,
         economic_damage_usd=economic_damage_usd,
+        # Metadata
         sample_count=total_count,
         category_breakdown={"bio": bio_count, "chem": chem_count, "cyber": cyber_count},
     )
 
 
-def aggregate_all_models() -> pd.DataFrame:
+def aggregate_all_models(results_dir: Path = None) -> pd.DataFrame:
     """Aggregate results from all models into a single DataFrame."""
-    CUMULATIVE_DIR.mkdir(parents=True, exist_ok=True)
+    if results_dir is None:
+        results_dir = DEFAULT_RESULTS_DIR
+
+    cumulative_dir = results_dir / "cumulative"
+    cumulative_dir.mkdir(parents=True, exist_ok=True)
 
     results = []
 
     # Find all model result directories
-    model_dirs = [d for d in RESULTS_DIR.iterdir() if d.is_dir() and d.name != "cumulative"]
+    model_dirs = [d for d in results_dir.iterdir() if d.is_dir() and d.name != "cumulative"]
 
     for model_dir in sorted(model_dirs):
         row = aggregate_model(model_dir)
@@ -468,10 +499,17 @@ def aggregate_all_models() -> pd.DataFrame:
 
     # Reorder columns: model_name first, metadata last
     primary_cols = ["model_name"]
-    categorical_cols = ["delivery_method", "material_access", "attack_vector", "sophistication", "requires_government_intervention"]
+    categorical_cols = [
+        # Bio fields
+        "threat", "delivery_method", "contagiousness", "route", "scale",
+        # Chem fields
+        "agent_class", "agent_grade", "exposure_environment",
+        # Cyber fields
+        "attack_vector", "sophistication", "requires_government_intervention"
+    ]
     boolean_cols = ["complied", "late_refusal"]
     quality_cols = ["specificity", "convincingness", "strongreject_score"]
-    numeric_cols = ["severity_level", "actor_count", "cost_usd", "fatalities", "injured", "economic_damage_usd"]
+    numeric_cols = ["severity_level", "fatalities", "actor_count", "cost_usd", "economic_damage_usd"]
     meta_cols = ["sample_count", "category_breakdown"]
 
     col_order = primary_cols + categorical_cols + boolean_cols + quality_cols + numeric_cols + meta_cols
@@ -491,11 +529,17 @@ def main():
         description="Aggregate per-model safety evaluation results into a unified DataFrame."
     )
     parser.add_argument(
+        "--results-dir",
+        type=str,
+        default=None,
+        help="Directory containing per-model result subdirectories (default: evaluation/evaluation-results)"
+    )
+    parser.add_argument(
         "--output",
         "-o",
         type=str,
-        default=str(CUMULATIVE_DIR / "danger_scores.pickle"),
-        help="Output path for the aggregated pickle file (default: results/cumulative/danger_scores.pickle)",
+        default=None,
+        help="Output path for the aggregated pickle file (default: <results-dir>/cumulative/danger_scores.pickle)",
     )
     parser.add_argument(
         "--format",
@@ -507,26 +551,45 @@ def main():
     )
     args = parser.parse_args()
 
+    results_dir = Path(args.results_dir) if args.results_dir else DEFAULT_RESULTS_DIR
+    cumulative_dir = results_dir / "cumulative"
+
+    if args.output is None:
+        output_path = cumulative_dir / "danger_scores.pickle"
+    else:
+        output_path = Path(args.output)
+
     print("=" * 60)
     print("Safety Evaluation Aggregator")
     print("=" * 60)
-    print(f"Results directory: {RESULTS_DIR}")
+    print(f"Results directory: {results_dir}")
     print()
 
-    df = aggregate_all_models()
+    df = aggregate_all_models(results_dir)
 
     if df.empty:
         print("No data to save.")
         return
 
-    output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Save in requested format
     if args.format == "csv":
         # Convert dict columns to JSON strings for CSV
         df_csv = df.copy()
-        for col in ["delivery_method", "material_access", "attack_vector", "sophistication", "requires_government_intervention", "complied", "late_refusal", "category_breakdown"]:
+        dict_cols = [
+            # Bio fields
+            "threat", "delivery_method", "contagiousness", "route", "scale",
+            # Chem fields
+            "agent_class", "agent_grade", "exposure_environment",
+            # Cyber fields
+            "attack_vector", "sophistication", "requires_government_intervention",
+            # Boolean fields
+            "complied", "late_refusal",
+            # Metadata
+            "category_breakdown"
+        ]
+        for col in dict_cols:
             if col in df_csv.columns:
                 df_csv[col] = df_csv[col].apply(lambda x: str(x) if isinstance(x, dict) else x)
         csv_path = output_path.with_suffix(".csv")
