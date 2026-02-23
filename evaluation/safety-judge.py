@@ -34,7 +34,7 @@ if str(_parent_dir) not in sys.path:
 if str(_script_dir) not in sys.path:
     sys.path.insert(0, str(_script_dir))
 
-from prompts import BIOTERRORISM_EVALUATION_PROMPT_TEMPLATE, CYBERSECURITY_EVALUATION_PROMPT_TEMPLATE, CHEMICAL_EVALUATION_PROMPT_TEMPLATE
+from prompts.loader import PromptLoader
 import pandas as pd
 import importlib.util
 
@@ -47,6 +47,10 @@ def _import_module_directly(module_name: str, module_path):
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
+
+# Load legacy prompts.py for cybersecurity fallback
+_legacy_prompts = _import_module_directly("legacy_prompts", _script_dir / "prompts.py")
+CYBERSECURITY_EVALUATION_PROMPT_TEMPLATE = _legacy_prompts.CYBERSECURITY_EVALUATION_PROMPT_TEMPLATE
 
 # Load openaiapi first since openai_engine depends on it
 _openaiapi = _import_module_directly("openaiapi", _parent_dir / "core" / "openaiapi.py")
@@ -81,7 +85,7 @@ class SafetyEvaluator:
         # API client to use ("openai", "deepseek", "togetherai", "openrouter", "deepinfra")
         client_name: str = "openai",
         temperature: float = 0.0,  # Low temperature for consistent evaluation
-        max_tokens: int = 256,
+        max_tokens: int = 3072,  # Sufficient for 3-5 paragraph analysis + JSON
         requests_per_second: float = 5.0,  # Rate limit for API requests
         max_validation_retries: int = 3,  # Max retries for validation failures
     ):
@@ -120,11 +124,8 @@ class SafetyEvaluator:
             "cybersecurity": cybersecurity_label,
             "bioterrorism": bioterrorism_label
         }
-        self.prompt_templates = {
-            "bioterrorism": BIOTERRORISM_EVALUATION_PROMPT_TEMPLATE,
-            "cybersecurity": CYBERSECURITY_EVALUATION_PROMPT_TEMPLATE,
-            "chemical": CHEMICAL_EVALUATION_PROMPT_TEMPLATE
-        }
+        self.prompt_loader = PromptLoader()
+        # Note: cybersecurity not supported by new system - handle separately if needed
         self.batches = self._batch_traces_by_category()
 
         os.makedirs(self.output_dir, exist_ok=True)
@@ -139,6 +140,37 @@ class SafetyEvaluator:
             return x.lower() in ('true', '1', 'yes')
         return bool(x)
 
+    # Numeric columns that should always be coerced to float (or NaN)
+    NUMERIC_COLS = {'severity_level', 'fatalities', 'specificity', 'convincingness'}
+    # Boolean columns
+    BOOL_COLS = {'complied', 'late_refusal'}
+
+    @staticmethod
+    def _unwrap_response(val):
+        """Unwrap list-wrapped responses to a plain string. Returns str or None."""
+        if val is None or (isinstance(val, float) and pd.isna(val)):
+            return None
+        if isinstance(val, list):
+            if len(val) == 0:
+                return None
+            val = val[0]
+        if isinstance(val, float) and pd.isna(val):
+            return None
+        return str(val) if val is not None else None
+
+    @staticmethod
+    def _extract_analysis_text(response_str) -> Optional[str]:
+        """Extract the <analysis>...</analysis> text from a raw response string."""
+        import re
+        # Unwrap lists
+        if isinstance(response_str, list) and len(response_str) > 0:
+            response_str = response_str[0] if isinstance(response_str[0], str) else str(response_str[0])
+        if not response_str or (isinstance(response_str, float) and pd.isna(response_str)):
+            return None
+        s = str(response_str).strip()
+        match = re.search(r'<analysis>(.*?)</analysis>', s, re.DOTALL)
+        return match.group(1).strip() if match else None
+
     def _parse_json_responses(self, output_df: pd.DataFrame) -> pd.DataFrame:
         """
         Parse JSON responses from the 'response' column and expand into separate columns.
@@ -147,16 +179,19 @@ class SafetyEvaluator:
             output_df: DataFrame with 'response' column containing JSON strings
 
         Returns:
-            DataFrame with JSON keys expanded into separate columns
+            DataFrame with JSON keys expanded into separate columns, plus 'analysis' string column
         """
         if 'response' not in output_df.columns:
             logger.warning(
                 "Warning: 'response' column not found in output_df. Returning original dataframe.")
             return output_df
 
-        # Store the original response column as raw_response
+        # Store the original response column as raw_response (unwrapped to plain string)
         output_df = output_df.copy()
-        output_df['raw_response'] = output_df['response']
+        output_df['raw_response'] = output_df['response'].apply(self._unwrap_response)
+
+        # Extract analysis text from each response
+        output_df['analysis'] = output_df['response'].apply(self._extract_analysis_text)
 
         # Parse JSON from response column
         parsed_data: list[Dict[str, Any]] = []
@@ -166,16 +201,13 @@ class SafetyEvaluator:
             response_str = row.get('response', '')
             parsed_row = {}
 
-            if response_str is None or pd.isna(response_str) or (isinstance(response_str, str) and len(response_str) == 0):
+            # Unwrap list-wrapped responses first
+            response_str = self._unwrap_response(response_str)
+            if response_str is None or len(response_str) == 0:
                 parsed_data.append({})
                 continue
 
             try:
-                # First, handle if response_str is already a list (not a string representation)
-                if isinstance(response_str, list) and len(response_str) > 0:
-                    response_str = response_str[0] if isinstance(
-                        response_str[0], str) else str(response_str[0])
-
                 # Convert to string and strip
                 response_str = str(response_str).strip()
 
@@ -194,24 +226,28 @@ class SafetyEvaluator:
                         pass  # If literal_eval fails, continue with original string
 
                 # Now try to extract and parse JSON
+                # First, remove <analysis>...</analysis> tags to avoid false matches
+                import re
+                response_without_analysis = re.sub(r'<analysis>.*?</analysis>', '', response_str, flags=re.DOTALL).strip()
+
                 # Find JSON object boundaries (look for actual { and }, not escaped versions)
                 json_start = -1
                 json_end = -1
 
                 # Find the first unescaped {
-                for i, char in enumerate(response_str):
-                    if char == '{' and (i == 0 or response_str[i-1] != '\\'):
+                for i, char in enumerate(response_without_analysis):
+                    if char == '{' and (i == 0 or response_without_analysis[i-1] != '\\'):
                         json_start = i
                         break
 
                 # Find the last unescaped }
-                for i in range(len(response_str) - 1, -1, -1):
-                    if response_str[i] == '}' and (i == 0 or response_str[i-1] != '\\'):
+                for i in range(len(response_without_analysis) - 1, -1, -1):
+                    if response_without_analysis[i] == '}' and (i == 0 or response_without_analysis[i-1] != '\\'):
                         json_end = i + 1
                         break
 
                 if json_start >= 0 and json_end > json_start:
-                    json_str = response_str[json_start:json_end]
+                    json_str = response_without_analysis[json_start:json_end]
 
                     # Try to decode escape sequences if they're present as literal strings
                     # e.g., "\\n" (two characters) -> "\n" (one character)
@@ -233,9 +269,9 @@ class SafetyEvaluator:
                     # Try parsing the whole string directly (after attempting to decode escapes)
                     try:
                         json_str = codecs.decode(
-                            response_str, 'unicode_escape')
+                            response_without_analysis, 'unicode_escape')
                     except (UnicodeDecodeError, ValueError):
-                        json_str = response_str
+                        json_str = response_without_analysis
 
                     data = json.loads(json_str)
 
@@ -254,22 +290,26 @@ class SafetyEvaluator:
 
             parsed_data.append(parsed_row)
 
-        # Create DataFrame from parsed data
+        # Create DataFrame from parsed data — leave missing values as NaN (not string 'None')
         parsed_df = pd.DataFrame(parsed_data, index=output_df.index)
 
-        # Ensure all keys have columns (fill missing with None for rows that don't have them)
-        for key in all_keys:
-            if key not in parsed_df.columns:
-                parsed_df[key] = None
-            else:
-                # Fill NaN values with None for consistency
-                parsed_df[key] = parsed_df[key].fillna('None')
+        # Coerce boolean fields
+        for bf in self.BOOL_COLS:
+            if bf in parsed_df.columns:
+                parsed_df[bf] = parsed_df[bf].apply(self._coerce_to_bool)
 
-        # Ensure boolean fields are properly typed
-        for bool_field in ['complied', 'late_refusal']:
-            if bool_field in parsed_df.columns:
-                parsed_df[bool_field] = parsed_df[bool_field].apply(
-                    lambda x: self._coerce_to_bool(x)
+        # Coerce numeric fields to float (handles int/str/'None' -> float/NaN)
+        for nf in self.NUMERIC_COLS:
+            if nf in parsed_df.columns:
+                parsed_df[nf] = pd.to_numeric(parsed_df[nf], errors='coerce')
+
+        # Coerce string categorical fields — replace literal 'None' with actual None
+        str_cols = set(parsed_df.columns) - self.NUMERIC_COLS - self.BOOL_COLS
+        for sc in str_cols:
+            if sc in parsed_df.columns:
+                parsed_df[sc] = parsed_df[sc].apply(
+                    lambda x: None if (x is None or (isinstance(x, str) and x.lower() == 'none')
+                                       or (isinstance(x, float) and pd.isna(x))) else x
                 )
 
         # Merge parsed columns with original dataframe
@@ -296,18 +336,60 @@ class SafetyEvaluator:
             for cat in categories
         }
 
+    def _prepare_batch_with_prompts(self, batch: pd.DataFrame, category: str) -> pd.DataFrame:
+        """
+        Prepare batch DataFrame by rendering prompts for each row.
+
+        Args:
+            batch: Input DataFrame with reasoning traces
+            category: One of "bioterrorism", "chemical", "cybersecurity"
+
+        Returns:
+            DataFrame with added 'rendered_prompt' column
+        """
+        batch = batch.copy()
+        rendered_prompts = []
+
+        for idx, row in batch.iterrows():
+            reasoning_trace = row[self.reasoning_trace_col]
+            user_query = row.get(self.inquiry_col, "")  # Optional
+
+            if category == "bioterrorism":
+                prompt = self.prompt_loader.render_biosecurity_prompt(
+                    reasoning_trace=reasoning_trace,
+                    user_query=user_query
+                )
+            elif category == "chemical":
+                prompt = self.prompt_loader.render_chemical_prompt(
+                    reasoning_trace=reasoning_trace,
+                    user_query=user_query
+                )
+            elif category == "cybersecurity":
+                # Fallback to old template if cybersecurity is still used
+                prompt = CYBERSECURITY_EVALUATION_PROMPT_TEMPLATE.format(
+                    reasoning_trace=reasoning_trace
+                )
+            else:
+                raise ValueError(f"Unknown category: {category}")
+
+            rendered_prompts.append(prompt)
+
+        batch['rendered_prompt'] = rendered_prompts
+        return batch
+
     async def _evaluate_by_category(self, batch: pd.DataFrame, category: str, overwrite: bool = False):
         if batch.empty:
             logger.info(f"Skipping category '{category}' - no data to evaluate")
             return
 
-        prompt_template = self.prompt_templates[category]
+        # Prepare batch with rendered prompts
+        batch = self._prepare_batch_with_prompts(batch, category)
 
         engine = OpenAI_Engine(
             input_df=batch,
-            prompt_template=prompt_template,
+            prompt_template="{rendered_prompt}",  # Simple passthrough
             template_map={
-                "reasoning_trace": self.reasoning_trace_col
+                "rendered_prompt": "rendered_prompt"
             },
             nick_name=f"safety_judge_{category}",
             batch_io_root=str(Path.home()) +
@@ -351,6 +433,9 @@ class SafetyEvaluator:
                     df = df.set_index('idx')
                 if isinstance(df, pd.DataFrame):
                     df = self._parse_json_responses(df)
+                    # Save the expanded raw pickle back with parsed columns
+                    df.to_pickle(pickle_path)
+                    logger.info(f"Saved expanded raw pickle for '{category}' to {pickle_path}")
                 dataframes.append(df)
             else:
                 logger.warning(
@@ -507,8 +592,9 @@ class SafetyEvaluator:
 
             logger.info(f"Re-evaluating {len(failed_batch)} rows for category '{category}'")
 
-            # Prepare re-evaluation batch
-            prompt_template = self.prompt_templates[category]
+            # NEW: Prepare batch with rendered prompts
+            failed_batch = self._prepare_batch_with_prompts(failed_batch, category)
+
             cache_filepath = os.path.join(
                 self.output_dir, f"{category}_safety_judge_reeval.pickle")
 
@@ -518,9 +604,9 @@ class SafetyEvaluator:
 
             engine = OpenAI_Engine(
                 input_df=failed_batch.reset_index(drop=False),  # Keep original index as column
-                prompt_template=prompt_template,
+                prompt_template="{rendered_prompt}",  # Simple passthrough
                 template_map={
-                    "reasoning_trace": self.reasoning_trace_col
+                    "rendered_prompt": "rendered_prompt"
                 },
                 nick_name=f"safety_judge_{category}_reeval",
                 batch_io_root=str(Path.home()) +
