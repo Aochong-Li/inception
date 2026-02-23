@@ -42,6 +42,8 @@ uv.lock
 
 # Dev data
 max_iterations_5
+max_iterations_1
+eval_three_models_results
 
 # Evaluation results
 evaluation/evaluation-results/
