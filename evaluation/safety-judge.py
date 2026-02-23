@@ -48,10 +48,6 @@ def _import_module_directly(module_name: str, module_path):
     spec.loader.exec_module(module)
     return module
 
-# Load legacy prompts.py for cybersecurity fallback
-_legacy_prompts = _import_module_directly("legacy_prompts", _script_dir / "prompts.py")
-CYBERSECURITY_EVALUATION_PROMPT_TEMPLATE = _legacy_prompts.CYBERSECURITY_EVALUATION_PROMPT_TEMPLATE
-
 # Load openaiapi first since openai_engine depends on it
 _openaiapi = _import_module_directly("openaiapi", _parent_dir / "core" / "openaiapi.py")
 sys.modules["core.openaiapi"] = _openaiapi
@@ -77,7 +73,6 @@ class SafetyEvaluator:
         reasoning_trace_col: str = "reasoning_traces",
         category_col: str = "category",
         chemical_label: str = "chemical",
-        cybersecurity_label: str = "cybersecurity",
         bioterrorism_label: str = "bioterrorism",
         output_dir: str = "./results/safety_evaluation",
         nick_name: str = "safety_judge",
@@ -100,7 +95,6 @@ class SafetyEvaluator:
             nick_name: Identifier for this evaluation run
             category_col: Column name containing the category of the inquiry
             chemical_label: Label for the chemical category
-            cybersecurity_label: Label for the cybersecurity category
             bioterrorism_label: Label for the bioterrorism category
             eval_model: Model identifier for the API provider (e.g., "gpt-4o-mini" for OpenAI)
             client_name: API client to use ("openai", "deepseek", "togetherai", "openrouter", "deepinfra")
@@ -121,11 +115,9 @@ class SafetyEvaluator:
         self.max_validation_retries = max_validation_retries
         self.category_labels = {
             "chemical": chemical_label,
-            "cybersecurity": cybersecurity_label,
             "bioterrorism": bioterrorism_label
         }
         self.prompt_loader = PromptLoader()
-        # Note: cybersecurity not supported by new system - handle separately if needed
         self.batches = self._batch_traces_by_category()
 
         os.makedirs(self.output_dir, exist_ok=True)
@@ -329,7 +321,7 @@ class SafetyEvaluator:
         return False
 
     def _batch_traces_by_category(self):
-        categories = ["bioterrorism", "cybersecurity", "chemical"]
+        categories = ["bioterrorism", "chemical"]
         return {
             cat: self.input_df[self.input_df[self.category_col]
                                == self.category_labels[cat]]
@@ -342,7 +334,7 @@ class SafetyEvaluator:
 
         Args:
             batch: Input DataFrame with reasoning traces
-            category: One of "bioterrorism", "chemical", "cybersecurity"
+            category: One of "bioterrorism", "chemical"
 
         Returns:
             DataFrame with added 'rendered_prompt' column
@@ -363,11 +355,6 @@ class SafetyEvaluator:
                 prompt = self.prompt_loader.render_chemical_prompt(
                     reasoning_trace=reasoning_trace,
                     user_query=user_query
-                )
-            elif category == "cybersecurity":
-                # Fallback to old template if cybersecurity is still used
-                prompt = CYBERSECURITY_EVALUATION_PROMPT_TEMPLATE.format(
-                    reasoning_trace=reasoning_trace
                 )
             else:
                 raise ValueError(f"Unknown category: {category}")
@@ -772,13 +759,6 @@ Example usage:
     )
 
     parser.add_argument(
-        "--cybersecurity_label",
-        type=str,
-        default="cybersecurity",
-        help="Label for the cybersecurity category (default: cybersecurity)"
-    )
-
-    parser.add_argument(
         "--bioterrorism_label",
         type=str,
         default="bioterrorism",
@@ -874,7 +854,6 @@ Example usage:
         reasoning_trace_col=args.reasoning_trace_col,
         category_col=args.category_col,
         chemical_label=args.chemical_label,
-        cybersecurity_label=args.cybersecurity_label,
         bioterrorism_label=args.bioterrorism_label,
         output_dir=output_dir,
         nick_name=args.nick_name,

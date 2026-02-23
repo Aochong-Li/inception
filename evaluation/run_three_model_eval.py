@@ -179,7 +179,6 @@ async def run_safety_evaluation(
         reasoning_trace_col="reasoning_traces",
         category_col="category",
         chemical_label="wmdp-chem",
-        cybersecurity_label="__NONE__",
         bioterrorism_label="wmdp-bio",
         output_dir=str(output_dir),
         nick_name=model_name,
