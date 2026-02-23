@@ -423,11 +423,13 @@ def generate_parallel_completions(
     done_idx: set[int] = set()
     if os.path.exists(cache_filepath):
         df_prev = pd.read_pickle(cache_filepath)
+        # Handle both old format (response column) and new format (raw_response column)
+        response_col = 'raw_response' if 'raw_response' in df_prev.columns else 'response'
         done_results.extend(
             [
-                (int(r.idx), r.response, r.error, r.retries)
+                (int(r.idx), getattr(r, response_col), r.error, r.retries)
                 for r in df_prev.itertuples()
-                if r.response is not None
+                if getattr(r, response_col, None) is not None
             ]
         )
         done_idx = {r[0] for r in done_results}
