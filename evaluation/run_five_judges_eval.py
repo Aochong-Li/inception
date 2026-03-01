@@ -10,6 +10,7 @@ Usage:
     python evaluation/run_five_judges_eval.py --judge gpt-5.2    # Run single judge
 """
 import json
+import os
 import subprocess
 import sys
 import argparse
@@ -19,6 +20,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+
+if not os.environ.get("OPENROUTER_API_KEY"):
+    print("ERROR: OPENROUTER_API_KEY not set. Add it to .env and retry.")
+    sys.exit(1)
 
 import pandas as pd
 
