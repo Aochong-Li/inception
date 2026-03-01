@@ -83,6 +83,7 @@ class SafetyEvaluator:
         max_tokens: int = 3072,  # Sufficient for 3-5 paragraph analysis + JSON
         requests_per_second: float = 5.0,  # Rate limit for API requests
         max_validation_retries: int = 3,  # Max retries for validation failures
+        strongreject_only: bool = False,  # Use StrongREJECT template for all rows
     ):
         """
         Initialize the Safety Judge.
@@ -113,10 +114,14 @@ class SafetyEvaluator:
         self.category_col = category_col
         self.requests_per_second = requests_per_second
         self.max_validation_retries = max_validation_retries
+        self.strongreject_only = strongreject_only
         self.category_labels = {
             "chemical": chemical_label,
             "bioterrorism": bioterrorism_label
         }
+        # Reduce max_tokens for StrongREJECT-only mode (3-field JSON is much shorter)
+        if self.strongreject_only and max_tokens > 512:
+            self.max_tokens = 512
         self.prompt_loader = PromptLoader()
         self.batches = self._batch_traces_by_category()
 
@@ -304,9 +309,8 @@ class SafetyEvaluator:
                                        or (isinstance(x, float) and pd.isna(x))) else x
                 )
 
-        # Merge parsed columns with original dataframe
-        # Drop the original 'response' column and keep 'raw_response'
-        output_df = output_df.drop(columns=['response'], errors='ignore')
+        # Merge parsed columns with original dataframe.
+        # Keep 'response' for durability (re-parsing, reeval); raw_response is the unwrapped string.
         output_df = pd.concat([output_df, parsed_df], axis=1)
 
         logger.info(f"Parsed JSON responses into {len(all_keys)} columns")
@@ -321,6 +325,8 @@ class SafetyEvaluator:
         return False
 
     def _batch_traces_by_category(self):
+        if self.strongreject_only:
+            return {"strongreject": self.input_df}
         categories = ["bioterrorism", "chemical"]
         return {
             cat: self.input_df[self.input_df[self.category_col]
@@ -346,7 +352,12 @@ class SafetyEvaluator:
             reasoning_trace = row[self.reasoning_trace_col]
             user_query = row.get(self.inquiry_col, "")  # Optional
 
-            if category == "bioterrorism":
+            if category == "strongreject" or self.strongreject_only:
+                prompt = self.prompt_loader.render_strongreject_prompt(
+                    reasoning_trace=reasoning_trace,
+                    user_query=user_query
+                )
+            elif category == "bioterrorism":
                 prompt = self.prompt_loader.render_biosecurity_prompt(
                     reasoning_trace=reasoning_trace,
                     user_query=user_query
@@ -400,11 +411,14 @@ class SafetyEvaluator:
     def _merge_results(self) -> pd.DataFrame:
         dataframes = []
         skipped_categories = []
-        for category in self.category_labels.keys():
+        category_keys = ["strongreject"] if self.strongreject_only else list(self.category_labels.keys())
+        for category in category_keys:
             pickle_path = os.path.join(
                 self.output_dir, f"{category}_safety_judge_raw.pickle")
             if os.path.exists(pickle_path):
                 df = pd.read_pickle(pickle_path)
+                if not df.columns.is_unique:
+                    df = df.loc[:, ~df.columns.duplicated()]
                 # Skip empty dataframes (categories with no data)
                 if df.empty:
                     logger.info(
@@ -412,14 +426,20 @@ class SafetyEvaluator:
                     skipped_categories.append(category)
                     continue
                 if 'response' not in df.columns:
-                    logger.warning(
-                        f"Category '{category}' result file missing 'response' column")
-                    skipped_categories.append(category)
-                    continue
+                    if 'raw_response' in df.columns:
+                        df['response'] = df['raw_response']
+                    else:
+                        logger.warning(
+                            f"Category '{category}' result file missing 'response' and 'raw_response' columns")
+                        skipped_categories.append(category)
+                        continue
                 if 'idx' in df.columns:
                     df = df.set_index('idx')
                 if isinstance(df, pd.DataFrame):
                     df = self._parse_json_responses(df)
+                    # Deduplicate columns (can occur from prior runs) so concat succeeds
+                    if not df.columns.is_unique:
+                        df = df.loc[:, ~df.columns.duplicated()]
                     # Save the expanded raw pickle back with parsed columns
                     df.to_pickle(pickle_path)
                     logger.info(f"Saved expanded raw pickle for '{category}' to {pickle_path}")
@@ -468,7 +488,8 @@ class SafetyEvaluator:
 
         coroutines = []
 
-        for category in self.category_labels.keys():
+        category_keys = ["strongreject"] if self.strongreject_only else list(self.category_labels.keys())
+        for category in category_keys:
             batch = self.batches[category]
             if isinstance(batch, pd.DataFrame):
                 coro = self._evaluate_by_category(batch, category, overwrite=overwrite)
@@ -507,8 +528,8 @@ class SafetyEvaluator:
         """
         Identify rows with None or invalid JSON responses for a given category.
 
-        Uses the batches directly (which contain raw_response if already evaluated)
-        or checks the combined safety_judge pickle file.
+        Loads the existing raw pickle (which has raw_response after evaluation)
+        to find failed rows, then returns the corresponding batch rows for re-eval.
 
         Args:
             category: Category to check ("bioterrorism", "chemical", "cybersecurity")
@@ -522,32 +543,30 @@ class SafetyEvaluator:
             logger.warning(f"No data for category '{category}'")
             return pd.DataFrame()
 
-        # Check if raw_response column exists (from previous evaluation)
-        if 'raw_response' not in batch.columns:
+        raw_path = os.path.join(
+            self.output_dir, f"{category}_safety_judge_raw.pickle")
+        if not os.path.exists(raw_path):
             logger.info(f"No previous evaluation found for category '{category}', all rows need evaluation")
-            return batch if isinstance(batch, pd.DataFrame) else pd.DataFrame()
+            return batch
 
-        failed_indices = []
-        for idx, row in batch.iterrows():
-            response = row.get('raw_response')
+        raw_df = pd.read_pickle(raw_path)
+        if 'raw_response' not in raw_df.columns:
+            logger.info(f"Raw pickle missing raw_response for '{category}', all rows need evaluation")
+            return batch
 
-            # Check for None/NaN responses
-            if response is None or (isinstance(response, float) and pd.isna(response)):
-                failed_indices.append(idx)
-                continue
-
-            # Validate the response structure
-            response_str = response[0] if isinstance(response, list) else response
-            if not validate_safety_response(response_str, category):
-                failed_indices.append(idx)
+        # Rows with None/NaN raw_response need re-eval; also check error column for API failures
+        is_failed = raw_df['raw_response'].isna()
+        if 'error' in raw_df.columns:
+            is_failed = is_failed | raw_df['error'].notna()
+        failed_indices = raw_df.loc[is_failed].index.tolist()
 
         if not failed_indices:
             logger.info(f"No failed rows found for category '{category}'")
             return pd.DataFrame()
 
         logger.info(f"Found {len(failed_indices)} failed rows for category '{category}'")
-        failed_batch = batch.loc[failed_indices]
-        return failed_batch if isinstance(failed_batch, pd.DataFrame) else pd.DataFrame()
+        failed_batch = batch.loc[batch.index.intersection(failed_indices)]
+        return failed_batch
 
     async def run_reeval(self, backup: bool = True) -> pd.DataFrame:
         """
@@ -570,7 +589,8 @@ class SafetyEvaluator:
 
         reeval_results = {}
 
-        for category in self.category_labels.keys():
+        category_keys = ["strongreject"] if self.strongreject_only else list(self.category_labels.keys())
+        for category in category_keys:
             failed_batch = self._identify_failed_rows(category)
 
             if failed_batch.empty:
@@ -590,7 +610,7 @@ class SafetyEvaluator:
                 os.remove(cache_filepath)
 
             engine = OpenAI_Engine(
-                input_df=failed_batch.reset_index(drop=False),  # Keep original index as column
+                input_df=failed_batch,  # Keep original index for correct idx in results
                 prompt_template="{rendered_prompt}",  # Simple passthrough
                 template_map={
                     "rendered_prompt": "rendered_prompt"
@@ -633,7 +653,10 @@ class SafetyEvaluator:
 
     def _apply_reeval_results(self, reeval_results: Dict[str, pd.DataFrame]) -> None:
         """
-        Apply re-evaluation results back to the original batches and raw pickle files.
+        Apply re-evaluation results back to the original raw pickle files.
+
+        Parses the reeval responses and updates the raw pickle in-place so that
+        _merge_results can pick up the new data on the next run.
 
         Args:
             reeval_results: Dict mapping category to reeval result DataFrame
@@ -642,35 +665,39 @@ class SafetyEvaluator:
             if reeval_df.empty:
                 continue
 
-            # Load the original raw pickle
             raw_path = os.path.join(
                 self.output_dir, f"{category}_safety_judge_raw.pickle")
-
             if not os.path.exists(raw_path):
                 logger.warning(f"No original raw pickle for category '{category}'")
                 continue
 
+            if 'response' not in reeval_df.columns:
+                logger.warning(f"Reeval df for '{category}' missing 'response' column")
+                continue
+
+            # Parse reeval results (reeval_df has idx, response, error, retries)
+            reeval_df = reeval_df.set_index('idx') if 'idx' in reeval_df.columns else reeval_df
+            reeval_parsed = self._parse_json_responses(reeval_df.copy())
+
             original_raw = pd.read_pickle(raw_path)
+            if 'idx' in original_raw.columns:
+                original_raw = original_raw.set_index('idx')
 
-            # The reeval_df has 'idx' column from generate_parallel_completions
-            # which corresponds to row numbers in the failed_batch
-            # We need to map these back to the original raw pickle indices
+            for idx in reeval_parsed.index:
+                if idx not in original_raw.index:
+                    continue
+                # Update with parsed fields (use .at for scalar assignment to avoid iterable error)
+                for col in reeval_parsed.columns:
+                    val = reeval_parsed.loc[idx, col]
+                    if isinstance(val, pd.Series):
+                        val = val.iloc[0]
+                    original_raw.at[idx, col] = val
+                original_raw.at[idx, 'response'] = reeval_df.loc[idx, 'response']
+                original_raw.at[idx, 'error'] = None
+                original_raw.at[idx, 'retries'] = reeval_df.loc[idx, 'retries']
 
-            # For simplicity, update the raw pickle with new responses
-            # The idx in reeval_df corresponds to iteration order in failed_batch
-            if 'idx' in reeval_df.columns and 'idx' in original_raw.columns:
-                for _, row in reeval_df.iterrows():
-                    reeval_idx = row['idx']
-                    # Find the corresponding row in original_raw
-                    idx_series = original_raw['idx']
-                    if reeval_idx in idx_series.tolist():
-                        mask = original_raw['idx'] == reeval_idx
-                        original_raw.loc[mask, 'response'] = row['response']
-                        original_raw.loc[mask, 'error'] = row['error']
-                        original_raw.loc[mask, 'retries'] = row['retries']
-
-                original_raw.to_pickle(raw_path)
-                logger.info(f"Updated raw pickle for category '{category}'")
+            original_raw.to_pickle(raw_path)
+            logger.info(f"Updated raw pickle for category '{category}'")
 
 
 if __name__ == "__main__":
@@ -806,6 +833,12 @@ Example usage:
     )
 
     parser.add_argument(
+        "--strongreject_only",
+        action="store_true",
+        help="Use StrongREJECT template for all rows (skip category-specific bio/chem templates)"
+    )
+
+    parser.add_argument(
         "--max_rows",
         type=int,
         default=None,
@@ -863,6 +896,7 @@ Example usage:
         max_tokens=args.max_tokens,
         requests_per_second=args.rate_limit,
         max_validation_retries=args.max_validation_retries,
+        strongreject_only=args.strongreject_only,
     )
 
     # Run evaluation or re-evaluation
