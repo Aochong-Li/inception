@@ -37,6 +37,7 @@ class OpenAI_Engine():
         validate_fn=None,
         category: str = None,
         max_validation_retries: int = 3,
+        max_consecutive_refusals: int = 0,
     ):
         self.input_df = input_df
         self.prompt_template = prompt_template
@@ -61,6 +62,7 @@ class OpenAI_Engine():
         self.validate_fn = validate_fn
         self.category = category
         self.max_validation_retries = max_validation_retries
+        self.max_consecutive_refusals = max_consecutive_refusals
 
     def prepare_chat_completions_input(self):
         """Prepare batch input file with prompts formatted from the input dataframe."""
@@ -139,6 +141,7 @@ class OpenAI_Engine():
                     validate_fn=self.validate_fn,
                     category=self.category,
                     max_validation_retries=self.max_validation_retries,
+                    max_consecutive_refusals=self.max_consecutive_refusals,
                 )
                 logger.info(f'Results are generated and stored at {self.cache_filepath}')
 
@@ -158,6 +161,7 @@ class OpenAI_Engine():
                 validate_fn=self.validate_fn,
                 category=self.category,
                 max_validation_retries=self.max_validation_retries,
+                max_consecutive_refusals=self.max_consecutive_refusals,
             )
 
         logger.info(f'Results are generated and check {self.batch_log_filepath}')

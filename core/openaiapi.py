@@ -11,7 +11,7 @@ Date: 2025-07-14
 
 from __future__ import annotations
 
-import json, logging, math, os, random, threading, time
+import json, logging, math, os, random, re, threading, time
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -211,6 +211,105 @@ def validate_safety_response(response: Optional[str], category: str, min_fields_
         logger.debug("JSON validation failed: %s", exc)
         return False
 
+
+# ---------------------------------------------------------------------------
+# Judge refusal detection & circuit breaker
+# ---------------------------------------------------------------------------
+_REFUSAL_PATTERNS = re.compile(
+    r"(?i)("
+    r"I\s+cannot|I'm\s+unable|I\s+apologize|against\s+my\s+guidelines"
+    r"|I\s+must\s+decline|unable\s+to\s+evaluate|cannot\s+assist"
+    r"|refuse\s+to|decline\s+to|I\s+can't\s+provide|I\s+can't\s+help"
+    r"|I\s+won't\s+be\s+able|not\s+able\s+to\s+assist"
+    r")"
+)
+_MIN_RESPONSE_LENGTH = 100
+
+
+def is_judge_refusal(response: Optional[List[str]]) -> bool:
+    """Detect whether a judge response is a refusal.
+
+    Returns True if:
+    - response is None
+    - the text is shorter than _MIN_RESPONSE_LENGTH characters
+    - the text matches common refusal phrases
+
+    **JSON escape hatch**: if the text matches a refusal pattern but also
+    contains a JSON object with >= 3 keys, it is treated as a valid response
+    (prevents false positives when the judge says "I apologize for the
+    complexity" inside a legitimate analysis).
+    """
+    if response is None:
+        return True
+
+    text = response[0] if isinstance(response, list) else response
+    if text is None:
+        return True
+    text = str(text).strip()
+
+    if len(text) < _MIN_RESPONSE_LENGTH:
+        return True
+
+    if _REFUSAL_PATTERNS.search(text):
+        # JSON escape hatch: look for a JSON object with >= 3 keys
+        json_start = text.find("{")
+        json_end = text.rfind("}")
+        if json_start >= 0 and json_end > json_start:
+            try:
+                data = json.loads(text[json_start:json_end + 1])
+                if isinstance(data, dict) and len(data) >= 3:
+                    return False  # valid analysis despite refusal-like phrasing
+            except (json.JSONDecodeError, ValueError):
+                pass
+        return True
+
+    return False
+
+
+class ConsecutiveRefusalTracker:
+    """Thread-safe tracker for consecutive judge refusals.
+
+    When *threshold* consecutive refusals are recorded, the tracker calls
+    ``stop_event.set()`` to signal workers to stop making API calls.
+    """
+
+    def __init__(self, threshold: int, stop_event: threading.Event):
+        self.threshold = threshold
+        self.stop_event = stop_event
+        self._lock = threading.Lock()
+        self._consecutive = 0
+        self._total_refusals = 0
+        self._total_valid = 0
+
+    def record(self, is_refusal: bool) -> None:
+        with self._lock:
+            if is_refusal:
+                self._consecutive += 1
+                self._total_refusals += 1
+                if self._consecutive >= self.threshold:
+                    self.stop_event.set()
+                    logger.warning(
+                        "Early stop triggered: %d consecutive refusals (threshold=%d)",
+                        self._consecutive, self.threshold,
+                    )
+            else:
+                self._consecutive = 0
+                self._total_valid += 1
+
+    @property
+    def stopped(self) -> bool:
+        return self.stop_event.is_set()
+
+    @property
+    def stats(self) -> Dict[str, int]:
+        with self._lock:
+            return {
+                "total_refusals": self._total_refusals,
+                "total_valid": self._total_valid,
+                "consecutive_at_stop": self._consecutive,
+            }
+
+
 # ---------------------------------------------------------------------------
 # Client factory – cached per‑process, per provider
 # ---------------------------------------------------------------------------
@@ -395,6 +494,7 @@ def _process(
     category: Optional[str] = None,
     max_validation_retries: int = 3,
     rate_limiter: Optional[TokenBucketRateLimiter] = None,
+    stop_event: Optional[threading.Event] = None,
 ) -> ResultRow:
     """
     Process a single request with optional response validation and retries.
@@ -407,14 +507,22 @@ def _process(
         category: Category for validation (e.g., "bioterrorism", "chemical", "cybersecurity")
         max_validation_retries: Max retries if validation fails (default 3)
         rate_limiter: Optional shared TokenBucketRateLimiter; acquire() is called before each API call.
+        stop_event: Optional threading.Event; if set, skip this request immediately.
 
     Returns:
         Tuple of (idx, response, errors, retries)
     """
+    # Early stop: skip if circuit breaker has fired
+    if stop_event is not None and stop_event.is_set():
+        return idx, None, ["Early stop: skipped"], 0
+
     body = req["body"]
     all_errors: List[str] = []
 
     for validation_attempt in range(1, max_validation_retries + 1):
+        # Check stop_event before each retry iteration
+        if stop_event is not None and stop_event.is_set():
+            return idx, None, ["Early stop: skipped"], 0
         # Acquire a token from the rate limiter before calling the API
         if rate_limiter is not None:
             rate_limiter.acquire()
@@ -492,6 +600,7 @@ def generate_parallel_completions(
     validate_fn: Optional[Callable[[Optional[str], str], bool]] = None,
     category: Optional[str] = None,
     max_validation_retries: int = 3,
+    max_consecutive_refusals: int = 0,
 ) -> None:
     """
     Run chat completions with a thread pool and checkpoint progress.
@@ -506,6 +615,7 @@ def generate_parallel_completions(
         validate_fn: Optional function to validate responses (response, category) -> bool
         category: Category for validation (e.g., "bioterrorism", "chemical", "cybersecurity")
         max_validation_retries: Max retries per request if validation fails (default 3)
+        max_consecutive_refusals: Stop category after N consecutive judge refusals (0 = disabled)
     """
     with open(input_filepath) as fh:
         requests_all = [json.loads(line) for line in fh]
@@ -548,6 +658,16 @@ def generate_parallel_completions(
             requests_per_second, burst, num_workers,
         )
 
+    # Build early-stop circuit breaker for judge refusals
+    stop_event: Optional[threading.Event] = None
+    tracker: Optional[ConsecutiveRefusalTracker] = None
+    if max_consecutive_refusals > 0:
+        stop_event = threading.Event()
+        tracker = ConsecutiveRefusalTracker(max_consecutive_refusals, stop_event)
+        logger.info(
+            "Refusal circuit breaker enabled: threshold=%d", max_consecutive_refusals,
+        )
+
     results = done_results.copy()
 
     with ThreadPoolExecutor(max_workers=num_workers) as pool:
@@ -555,13 +675,29 @@ def generate_parallel_completions(
             pool.submit(
                 _process, idx, req, func_name,
                 validate_fn, category, max_validation_retries, limiter,
+                stop_event,
             ): idx
             for idx, req in args_list
         }
 
         for i, fut in enumerate(tqdm(as_completed(futures), total=len(futures), desc="Requests")):
             try:
-                results.append(fut.result())
+                result_row = fut.result()
+                results.append(result_row)
+
+                # Track refusals if circuit breaker is active
+                if tracker is not None:
+                    _, response, _, _ = result_row
+                    tracker.record(is_judge_refusal(response))
+
+                    # Cancel remaining pending futures if stopped
+                    if tracker.stopped:
+                        cancelled = 0
+                        for pending_fut in futures:
+                            if pending_fut.cancel():
+                                cancelled += 1
+                        if cancelled:
+                            logger.info("Cancelled %d pending futures after early stop", cancelled)
             except Exception as exc:
                 idx = futures[fut]
                 logger.error("Worker crashed on idx %s: %s", idx, exc)
@@ -571,6 +707,14 @@ def generate_parallel_completions(
                 _save(cache_filepath, results)
 
     _save(cache_filepath, results)
+
+    if tracker is not None:
+        stats = tracker.stats
+        logger.info(
+            "Refusal stats: %d refusals, %d valid, consecutive_at_stop=%d",
+            stats["total_refusals"], stats["total_valid"], stats["consecutive_at_stop"],
+        )
+
     logger.info("Finished %d total results.", len(results))
 
 

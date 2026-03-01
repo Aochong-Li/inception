@@ -84,6 +84,7 @@ class SafetyEvaluator:
         requests_per_second: float = 5.0,  # Rate limit for API requests
         max_validation_retries: int = 3,  # Max retries for validation failures
         strongreject_only: bool = False,  # Use StrongREJECT template for all rows
+        max_consecutive_refusals: int = 0,  # Stop category after N consecutive refusals (0 = disabled)
     ):
         """
         Initialize the Safety Judge.
@@ -115,6 +116,7 @@ class SafetyEvaluator:
         self.requests_per_second = requests_per_second
         self.max_validation_retries = max_validation_retries
         self.strongreject_only = strongreject_only
+        self.max_consecutive_refusals = max_consecutive_refusals
         self.category_labels = {
             "chemical": chemical_label,
             "bioterrorism": bioterrorism_label
@@ -402,6 +404,7 @@ class SafetyEvaluator:
             validate_fn=validate_safety_response,
             category=category,
             max_validation_retries=self.max_validation_retries,
+            max_consecutive_refusals=self.max_consecutive_refusals,
         )
 
         # Run the synchronous run_model in a thread pool so it can be awaited
@@ -627,6 +630,7 @@ class SafetyEvaluator:
                 validate_fn=validate_safety_response,
                 category=category,
                 max_validation_retries=self.max_validation_retries,
+                max_consecutive_refusals=self.max_consecutive_refusals,
             )
 
             # Run re-evaluation
@@ -833,6 +837,13 @@ Example usage:
     )
 
     parser.add_argument(
+        "--max_consecutive_refusals",
+        type=int,
+        default=0,
+        help="Stop a category after N consecutive judge refusals (0 = disabled)"
+    )
+
+    parser.add_argument(
         "--strongreject_only",
         action="store_true",
         help="Use StrongREJECT template for all rows (skip category-specific bio/chem templates)"
@@ -897,6 +908,7 @@ Example usage:
         requests_per_second=args.rate_limit,
         max_validation_retries=args.max_validation_retries,
         strongreject_only=args.strongreject_only,
+        max_consecutive_refusals=args.max_consecutive_refusals,
     )
 
     # Run evaluation or re-evaluation

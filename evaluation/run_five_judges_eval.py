@@ -85,6 +85,7 @@ def run_judge_eval(
     target_model: str,
     preprocessed_path: Path,
     overwrite: bool = False,
+    max_consecutive_refusals: int = 0,
 ):
     """Run safety-judge.py for one judge × target combination."""
     output_dir = RESULTS_BASE / judge_nick / target_model
@@ -114,6 +115,8 @@ def run_judge_eval(
     ]
     if overwrite:
         cmd.append("--overwrite")
+    if max_consecutive_refusals > 0:
+        cmd.extend(["--max_consecutive_refusals", str(max_consecutive_refusals)])
 
     print(f"  Running: {judge_nick} -> {target_model}")
     result = subprocess.run(cmd)
@@ -130,6 +133,7 @@ def run_judge_all_targets(
     targets: list,
     preprocessed: dict,
     overwrite: bool,
+    max_consecutive_refusals: int = 0,
 ) -> str:
     """Run all targets for a single judge. Called in a subprocess via ProcessPoolExecutor.
 
@@ -142,6 +146,7 @@ def run_judge_all_targets(
             target_model=target,
             preprocessed_path=Path(preprocessed[target]),
             overwrite=overwrite,
+            max_consecutive_refusals=max_consecutive_refusals,
         )
     return judge_nick
 
@@ -209,6 +214,12 @@ def main():
         action="store_false",
         help="Run judges sequentially instead of in parallel",
     )
+    parser.add_argument(
+        "--max-consecutive-refusals",
+        type=int,
+        default=5,
+        help="Stop a category after N consecutive judge refusals (0 = disabled, default: 5)",
+    )
     args = parser.parse_args()
 
     # Load sample indices
@@ -244,6 +255,7 @@ def main():
                     targets,
                     {t: str(p) for t, p in preprocessed.items()},
                     args.overwrite,
+                    args.max_consecutive_refusals,
                 ): nick
                 for nick, mid in judges.items()
             }
@@ -271,6 +283,7 @@ def main():
                     target_model=target,
                     preprocessed_path=preprocessed[target],
                     overwrite=args.overwrite,
+                    max_consecutive_refusals=args.max_consecutive_refusals,
                 )
                 if not ok:
                     all_ok = False
