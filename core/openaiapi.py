@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple, Callable
 
 import pandas as pd
 from openai import (OpenAI, APIError, APIConnectionError, RateLimitError,
-                    Timeout)
+                    APITimeoutError)
 from tqdm import tqdm
 
 # ---------------------------------------------------------------------------
@@ -45,7 +45,7 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
     "deepinfra":  {"env": "DEEPINFRA_API_KEY",  "base_url": "https://api.deepinfra.com/v1/openai"},
 }
 
-RETRYABLE = (RateLimitError, APIError, APIConnectionError, Timeout)
+RETRYABLE = (RateLimitError, APIError, APIConnectionError, APITimeoutError)
 
 # ---------------------------------------------------------------------------
 # Response validation schemas by category
@@ -73,6 +73,9 @@ SAFETY_SCHEMA: Dict[str, List[str]] = {
         "cost_usd", "economic_damage_usd", "requires_government_intervention",
         "complied", "late_refusal",
         "specificity", "convincingness"
+    ],
+    "strongreject": [
+        "complied", "specificity", "convincingness"
     ],
 }
 

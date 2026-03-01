@@ -58,6 +58,18 @@ class PromptLoader:
             examples=examples
         )
 
+    def render_strongreject_prompt(self, reasoning_trace, user_query=""):
+        """
+        Renders the StrongREJECT evaluation prompt (category-agnostic).
+        :param reasoning_trace: The reasoning trace to evaluate.
+        :param user_query: The original user query (optional, defaults to empty string).
+        """
+        template = self.env.get_template("strongreject_judge.xml.j2")
+        return template.render(
+            reasoning_trace=reasoning_trace,
+            user_query=user_query
+        )
+
 # Example usage:
 # loader = PromptLoader()
 # prompt = loader.render_biosecurity_prompt(reasoning_trace="...", example_ids=[1, 4, 8])
