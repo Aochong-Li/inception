@@ -11,7 +11,7 @@ Date: 2025-07-14
 
 from __future__ import annotations
 
-import json, logging, math, os, random, time
+import json, logging, math, os, random, threading, time
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -46,6 +46,64 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
 }
 
 RETRYABLE = (RateLimitError, APIError, APIConnectionError, APITimeoutError)
+
+# ---------------------------------------------------------------------------
+# Thread-safe token bucket rate limiter
+# ---------------------------------------------------------------------------
+class TokenBucketRateLimiter:
+    """Thread-safe token bucket for rate limiting API calls.
+
+    Workers call ``acquire()`` before each API request.  On ``RateLimitError``
+    they call ``throttle()`` to halve the effective rate; on success they call
+    ``restore()`` to gradually recover toward the original rate.
+    """
+
+    def __init__(self, rate: float, burst: int = 1):
+        self.rate = rate                   # tokens per second (current effective)
+        self._target_rate = rate           # original / ceiling rate for restore
+        self.burst = burst                 # max tokens (burst capacity)
+        self.tokens = float(burst)         # current token count
+        self.last_refill = time.monotonic()
+        self._lock = threading.Lock()
+        self._min_rate = 0.5              # floor to prevent complete stall
+
+    def _refill(self) -> None:
+        """Add tokens proportional to elapsed time. Must be called with lock held."""
+        now = time.monotonic()
+        elapsed = now - self.last_refill
+        self.tokens = min(float(self.burst), self.tokens + elapsed * self.rate)
+        self.last_refill = now
+
+    def acquire(self, timeout: float = 30.0) -> bool:
+        """Block until a token is available (or timeout expires).
+
+        Returns True if a token was acquired, False on timeout.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            with self._lock:
+                self._refill()
+                if self.tokens >= 1.0:
+                    self.tokens -= 1.0
+                    return True
+            # Sleep for at most the time needed to accumulate one token
+            wait = min(1.0 / max(self.rate, self._min_rate), deadline - time.monotonic())
+            if wait <= 0:
+                return False
+            time.sleep(wait)
+
+    def throttle(self, factor: float = 0.5) -> None:
+        """Reduce rate on 429 — called from retry logic."""
+        with self._lock:
+            self.rate = max(self._min_rate, self.rate * factor)
+            logger.warning("Rate limiter throttled to %.2f req/s", self.rate)
+
+    def restore(self) -> None:
+        """Gradually recover rate after successful requests (10% step toward target)."""
+        with self._lock:
+            if self.rate < self._target_rate:
+                self.rate = min(self._target_rate, self.rate * 1.1)
+
 
 # ---------------------------------------------------------------------------
 # Response validation schemas by category
@@ -191,6 +249,7 @@ def generate_chat_completions(
     presence_penalty: float = 0.0,
     stop: Optional[List[str]] = None,
     max_attempts: int = 3,
+    rate_limiter: Optional["TokenBucketRateLimiter"] = None,
 ) -> Tuple[Optional[List[str]], List[str], int]:
     client = create_client(client_name)
     messages = [
@@ -214,11 +273,34 @@ def generate_chat_completions(
                     stop=stop,
                 )
             resp = client.chat.completions.create(**kwargs)
+            # Restore rate after a successful call
+            if rate_limiter is not None:
+                rate_limiter.restore()
             if model == "deepseek-reasoner":
                 return [
                     f"{c.message.reasoning_content}\n</think>\n{c.message.content}" for c in resp.choices
                 ], errors, attempt
             return [c.message.content for c in resp.choices], errors, attempt
+        except RateLimitError as exc:
+            errors.append(repr(exc))
+            # Signal the shared limiter to back off
+            if rate_limiter is not None:
+                rate_limiter.throttle(0.5)
+            if attempt == max_attempts:
+                logger.error("%s – final failure", exc)
+                return None, errors, attempt
+            # header‑aware back‑off
+            hdr_delay = None
+            if hasattr(exc, "response") and exc.response is not None:
+                retry_after = exc.response.headers.get("Retry-After")
+                if retry_after:
+                    try:
+                        hdr_delay = float(retry_after)
+                    except ValueError:
+                        hdr_delay = None
+            delay = hdr_delay if hdr_delay else min(30, 2 ** (attempt - 1)) * random.uniform(0.8, 1.2)
+            logger.warning("%s – retry %d/%d in %.1fs", exc, attempt, max_attempts, delay)
+            time.sleep(delay)
         except RETRYABLE as exc:
             errors.append(repr(exc))
             if attempt == max_attempts:
@@ -312,6 +394,7 @@ def _process(
     validate_fn: Optional[Callable[[Optional[str], str], bool]] = None,
     category: Optional[str] = None,
     max_validation_retries: int = 3,
+    rate_limiter: Optional[TokenBucketRateLimiter] = None,
 ) -> ResultRow:
     """
     Process a single request with optional response validation and retries.
@@ -323,6 +406,7 @@ def _process(
         validate_fn: Optional function to validate response (response, category) -> bool
         category: Category for validation (e.g., "bioterrorism", "chemical", "cybersecurity")
         max_validation_retries: Max retries if validation fails (default 3)
+        rate_limiter: Optional shared TokenBucketRateLimiter; acquire() is called before each API call.
 
     Returns:
         Tuple of (idx, response, errors, retries)
@@ -331,6 +415,10 @@ def _process(
     all_errors: List[str] = []
 
     for validation_attempt in range(1, max_validation_retries + 1):
+        # Acquire a token from the rate limiter before calling the API
+        if rate_limiter is not None:
+            rate_limiter.acquire()
+
         if func_name == "chat_completions":
             response, errs, tries = generate_chat_completions(
                 input_prompt=body["messages"][1]["content"],
@@ -344,6 +432,7 @@ def _process(
                 frequency_penalty=body.get("frequency_penalty", 0.0),
                 presence_penalty=body.get("presence_penalty", 0.0),
                 stop=body.get("stop"),
+                rate_limiter=rate_limiter,
             )
         elif func_name == "completions":
             response, errs, tries = generate_completions(
@@ -447,34 +536,28 @@ def generate_parallel_completions(
         (int(req["custom_id"].split("_")[1]), req) for req in pending
     ]
 
-    # Calculate delay between requests for rate limiting
-    request_delay = 1.0 / requests_per_second if requests_per_second > 0 else 0.0
-    if request_delay > 0:
-        logger.info("Rate limiting enabled: %.2f requests/sec (%.2fs between requests)", requests_per_second, request_delay)
-        # With rate limiting, reduce workers to avoid overwhelming the rate limiter
-        effective_workers = min(num_workers, max(1, int(requests_per_second)))
-        logger.info("Effective workers reduced to %d for rate limiting", effective_workers)
-    else:
-        effective_workers = num_workers
+    # Build a token bucket rate limiter when a rate limit is requested.
+    # Workers call limiter.acquire() internally (inside _process), so the
+    # submission loop no longer needs to sleep and can use all num_workers.
+    limiter: Optional[TokenBucketRateLimiter] = None
+    if requests_per_second > 0:
+        burst = max(3, int(requests_per_second))
+        limiter = TokenBucketRateLimiter(rate=requests_per_second, burst=burst)
+        logger.info(
+            "Token bucket rate limiter: %.2f req/s, burst=%d, workers=%d",
+            requests_per_second, burst, num_workers,
+        )
 
     results = done_results.copy()
-    last_request_time = 0.0
 
-    with ThreadPoolExecutor(max_workers=effective_workers) as pool:
-        futures = {}
-        for idx, req in args_list:
-            # Apply rate limiting
-            if request_delay > 0:
-                elapsed = time.time() - last_request_time
-                if elapsed < request_delay:
-                    time.sleep(request_delay - elapsed)
-                last_request_time = time.time()
-
-            future = pool.submit(
+    with ThreadPoolExecutor(max_workers=num_workers) as pool:
+        futures = {
+            pool.submit(
                 _process, idx, req, func_name,
-                validate_fn, category, max_validation_retries
-            )
-            futures[future] = idx
+                validate_fn, category, max_validation_retries, limiter,
+            ): idx
+            for idx, req in args_list
+        }
 
         for i, fut in enumerate(tqdm(as_completed(futures), total=len(futures), desc="Requests")):
             try:
