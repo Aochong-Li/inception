@@ -55,7 +55,7 @@ We evaluate on different safety benchmarks, e.g., WMDP (Weapons of Mass Destruct
 
 ## GPT-4 Fine-tuning
 
-N/A — our research requires inference API access only. We test models as attack targets and use GPT-5-mini as a safety judge. No fine-tuning is needed.
+N/A — our research requires inference API access only, not fine-tuning. We use OpenAI models in two roles: (1) as attack targets, where we measure whether iterative CoT prefix injection can hijack reasoning traces into compliance with harmful requests, and (2) as safety judges, where GPT-5-mini evaluates attack output severity using our calibrated biosecurity and chemical threat scoring framework. Both roles require only standard chat completion endpoints — no weight modification or training access is needed.
 
 ---
 
