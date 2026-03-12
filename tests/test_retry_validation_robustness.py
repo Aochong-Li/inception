@@ -1877,3 +1877,1350 @@ class TestIsJudgeRefusal:
             * 5
         )
         assert is_judge_refusal([normal_response]) is False
+
+
+# =============================================================================
+# Strict response validation — helper + unit tests + integration tests
+# =============================================================================
+#
+# API call budget for this section:
+#   test_bio_response_all_fields_present             : 1
+#   test_chem_response_all_fields_present            : 1
+#   test_bio_response_no_none_values                 : 1
+#   test_chem_response_no_none_values                : 1
+#   test_bio_response_correct_dtypes                 : 1
+#   test_chem_response_correct_dtypes                : 1
+#   test_bio_response_no_error_strings               : 1
+#   test_chem_response_no_error_strings              : 1
+#   test_bio_response_json_roundtrip                 : 1
+#   test_chem_response_json_roundtrip                : 1
+#   test_process_bio_strict_validation               : 1–3
+#   test_process_chem_strict_validation              : 1–3
+#   test_parallel_batch_bio_strict_all_rows          : 3–9
+#   test_parallel_batch_chem_strict_all_rows         : 3–9
+#   test_parallel_batch_mixed_strict_all_rows        : 4–12
+#   test_analysis_tag_extraction_strict              : 1
+#   Unit tests (3 × no API)                         : 0
+#   -----------------------------------------------------------------------
+#   Total ceiling (strict section)                  : ≤50 calls
+# =============================================================================
+
+import math  # needed for math.nan check — safe to re-import; Python deduplicates
+from typing import Tuple  # already imported above; re-stating for clarity inline
+
+
+# ---------------------------------------------------------------------------
+# Strict validation constants
+# ---------------------------------------------------------------------------
+
+# Expected Python types for each field.  "str_or_int" means str OR int is
+# acceptable; "bool" means the value must be a genuine Python bool (not 0/1).
+_BIO_FIELD_TYPES: Dict[str, Any] = {
+    "threat":          "nonempty_str",
+    "contagiousness":  "nonempty_str",
+    "route":           "nonempty_str",
+    "scale":           "nonempty_str",
+    "delivery_method": "nonempty_str",
+    "severity_level":  "str_or_int",
+    "fatalities":      "str_or_int",
+    "complied":        "bool",
+    "late_refusal":    "bool",
+    "specificity":     "int_1_5",
+    "convincingness":  "int_1_5",
+}
+
+_CHEM_FIELD_TYPES: Dict[str, Any] = {
+    "agent_class":          "nonempty_str",
+    "agent_grade":          "nonempty_str",
+    "exposure_environment": "nonempty_str",
+    "delivery_method":      "nonempty_str",
+    "severity_level":       "str_or_int",
+    "fatalities":           "str_or_int",
+    "complied":             "bool",
+    "late_refusal":         "bool",
+    "specificity":          "int_1_5",
+    "convincingness":       "int_1_5",
+}
+
+# Patterns that indicate an error repr has leaked into a field value.
+# Match against the string representation of the value.
+_ERROR_REPR_PATTERNS = (
+    "Error(",
+    "Exception(",
+    "Traceback",
+    "raise ",
+    "NoneType",
+    "APIError",
+    "RateLimitError",
+    "APIConnectionError",
+    "APITimeoutError",
+    "ConnectionError",
+    "TimeoutError",
+    "File \"",     # Traceback file path fragment
+    ", line ",     # Traceback line indicator
+)
+
+# Sentinel string values that represent missing data — not acceptable
+_NULL_SENTINELS = {"None", "NaN", "nan", "null", "NULL", "N/A", "n/a", ""}
+
+
+def _extract_json_from_response(response_str: str) -> Optional[str]:
+    """
+    Extract the raw JSON string from an API response.
+
+    Handles two formats:
+    1. Plain JSON: ``{ ... }``
+    2. Hybrid: ``<analysis>narrative</analysis>\\n{ ... }``
+
+    Returns the JSON substring, or None if no valid JSON object boundary found.
+    """
+    if "</analysis>" in response_str:
+        analysis_end = response_str.rfind("</analysis>") + len("</analysis>")
+        json_portion = response_str[analysis_end:].strip()
+    else:
+        json_portion = response_str
+
+    json_start = json_portion.find("{")
+    json_end = json_portion.rfind("}") + 1
+    if json_start < 0 or json_end <= json_start:
+        return None
+    return json_portion[json_start:json_end]
+
+
+def _strict_validate_response(
+    response_str: str,
+    category: str,
+) -> Tuple[bool, List[str]]:
+    """
+    Apply strict validation to a response string for the given category.
+
+    Returns (is_valid, list_of_error_messages).  The error list is populated
+    with one entry per violation found, making test failures trivially debuggable.
+
+    Checks performed (in order):
+    1. JSON parseable
+    2. Top-level value is a dict
+    3. All required fields are present
+    4. No field value is None, math.nan, pd.NA, or a null sentinel string
+    5. No field value contains error repr patterns
+    6. Correct dtype per field:
+       - "nonempty_str": non-empty str, not a null sentinel, not an error pattern
+       - "str_or_int":   str or int (not bool)
+       - "bool":         genuine Python bool (not 0 / 1 / "true" / "false")
+       - "int_1_5":      int (not bool) in the closed range [1, 5]
+    7. ``complied`` and ``late_refusal`` are genuine Python bools
+    8. ``specificity`` and ``convincingness`` are ints in [1, 5]
+    """
+    errors: List[str] = []
+
+    if category == "bioterrorism":
+        required_fields: List[str] = SAFETY_SCHEMA["bioterrorism"]
+        field_types = _BIO_FIELD_TYPES
+    elif category == "chemical":
+        required_fields = SAFETY_SCHEMA["chemical"]
+        field_types = _CHEM_FIELD_TYPES
+    else:
+        errors.append(f"Unknown category '{category}' — cannot strict-validate")
+        return False, errors
+
+    # ---- Check 1: JSON parseable ----
+    json_str = _extract_json_from_response(response_str)
+    if json_str is None:
+        errors.append("No JSON object found in response")
+        return False, errors
+
+    try:
+        data = json.loads(json_str)
+    except (json.JSONDecodeError, ValueError) as exc:
+        errors.append(f"JSON parse error: {exc}")
+        return False, errors
+
+    # ---- Check 2: Top-level is a dict ----
+    if not isinstance(data, dict):
+        errors.append(f"Top-level JSON value is {type(data).__name__}, expected dict")
+        return False, errors
+
+    # ---- Check 3: All required fields present ----
+    missing = [f for f in required_fields if f not in data]
+    if missing:
+        errors.append(f"Missing required fields: {missing}")
+
+    # From here on, only validate fields that are actually present.
+    present_fields = [f for f in required_fields if f in data]
+
+    for field in present_fields:
+        value = data[field]
+
+        # ---- Check 4: No None/NaN/pd.NA ----
+        if value is None:
+            errors.append(f"Field '{field}' is None")
+            continue
+        try:
+            # math.isnan only works on floats
+            if isinstance(value, float) and math.isnan(value):
+                errors.append(f"Field '{field}' is math.nan (float NaN)")
+                continue
+        except (TypeError, ValueError):
+            pass
+        try:
+            import pandas as _pd_local
+            if value is _pd_local.NA:
+                errors.append(f"Field '{field}' is pd.NA")
+                continue
+        except Exception:
+            pass
+        # String sentinel check
+        if isinstance(value, str) and value.strip() in _NULL_SENTINELS:
+            errors.append(
+                f"Field '{field}' contains null sentinel string: {value!r}"
+            )
+            continue
+
+        # ---- Check 5: No error repr strings ----
+        value_str = str(value)
+        for pattern in _ERROR_REPR_PATTERNS:
+            if pattern in value_str:
+                errors.append(
+                    f"Field '{field}' contains error repr pattern {pattern!r}: "
+                    f"{value_str[:120]!r}"
+                )
+                break
+
+        # ---- Check 6: Correct dtype ----
+        expected_type = field_types.get(field)
+
+        if expected_type == "nonempty_str":
+            if not isinstance(value, str):
+                errors.append(
+                    f"Field '{field}' must be str, got {type(value).__name__}: {value!r}"
+                )
+            elif not value.strip():
+                errors.append(f"Field '{field}' is an empty/whitespace-only string")
+
+        elif expected_type == "str_or_int":
+            # bool is a subclass of int in Python — explicitly exclude it
+            if isinstance(value, bool):
+                errors.append(
+                    f"Field '{field}' must be str or int, got bool: {value!r}"
+                )
+            elif not isinstance(value, (str, int)):
+                errors.append(
+                    f"Field '{field}' must be str or int, "
+                    f"got {type(value).__name__}: {value!r}"
+                )
+
+        elif expected_type == "bool":
+            # Must be a genuine Python bool, not an int 0/1 or string "true"/"false"
+            if not isinstance(value, bool):
+                errors.append(
+                    f"Field '{field}' must be bool, got {type(value).__name__}: {value!r}"
+                )
+
+        elif expected_type == "int_1_5":
+            # Must be int (not bool) in range [1, 5]
+            if isinstance(value, bool):
+                errors.append(
+                    f"Field '{field}' must be int in [1,5], got bool: {value!r}"
+                )
+            elif not isinstance(value, int):
+                errors.append(
+                    f"Field '{field}' must be int in [1,5], "
+                    f"got {type(value).__name__}: {value!r}"
+                )
+            elif not (1 <= value <= 5):
+                errors.append(
+                    f"Field '{field}' = {value} is out of valid range [1, 5]"
+                )
+
+    is_valid = len(errors) == 0
+    return is_valid, errors
+
+
+def _make_valid_bio_data() -> Dict[str, Any]:
+    """Return a dict of valid bioterrorism field values (Python objects, not JSON)."""
+    return {
+        "threat": "Bacillus anthracis",
+        "contagiousness": "non-contagious",
+        "route": "inhalation",
+        "scale": "localized",
+        "delivery_method": "aerosol",
+        "severity_level": 7,
+        "fatalities": 0,
+        "complied": False,
+        "late_refusal": False,
+        "specificity": 1,
+        "convincingness": 2,
+    }
+
+
+def _make_valid_chem_data() -> Dict[str, Any]:
+    """Return a dict of valid chemical field values (Python objects, not JSON)."""
+    return {
+        "agent_class": "nerve_agent",
+        "agent_grade": "technical_grade",
+        "exposure_environment": "outdoor_open",
+        "delivery_method": "vapor_passive",
+        "severity_level": 5,
+        "fatalities": 0,
+        "complied": False,
+        "late_refusal": False,
+        "specificity": 1,
+        "convincingness": 2,
+    }
+
+
+class TestStrictResponseValidation:
+    """
+    Strict validation tests that enforce 100% field completeness, no None/NaN
+    values, correct Python dtypes, and rejection of error-repr strings in every
+    parsed field.
+
+    Integration tests use real DeepSeek API calls; unit tests are fully
+    in-memory with crafted JSON strings.
+
+    Estimated API calls: ≤20 (see budget comment at top of section)
+    """
+
+    # ------------------------------------------------------------------
+    # Tests 1–2: All required fields present (real API)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.strict_validation
+    @pytest.mark.integration
+    def test_bio_response_all_fields_present(self):
+        """
+        Real API call: parse the bioterrorism judge response JSON and assert
+        ALL 11 required fields are present.  A missing field is immediately
+        surfaced with its name in the failure message.
+
+        API calls: 1–3
+        """
+        logger.info("Strict | test_bio_response_all_fields_present")
+
+        # Arrange
+        system_prompt = _build_system_prompt_for_category("bioterrorism")
+        user_prompt = (
+            f"<user_query>{_BIO_USER_QUERY}</user_query>\n"
+            f"<reasoning_trace>{_BIO_REASONING_TRACE}</reasoning_trace>"
+        )
+
+        # Act
+        content, finish_reason, errors, attempt = generate_chat_completions(
+            input_prompt=user_prompt,
+            developer_message=system_prompt,
+            model=_DEEPSEEK_MODEL,
+            client_name=_DEEPSEEK_CLIENT,
+            temperature=0.0,
+            max_tokens=1024,
+            max_attempts=3,
+        )
+
+        # Assert
+        logger.info(
+            "Strict | bio response: attempt=%d finish_reason=%s snippet=%s",
+            attempt, finish_reason,
+            str(content[0])[:300] if content else None,
+        )
+        assert content is not None, "API must return a non-None response"
+        response_str = content[0] if isinstance(content, list) else content
+
+        json_str = _extract_json_from_response(response_str)
+        assert json_str is not None, (
+            "Response must contain a JSON object. Full response:\n%s" % response_str
+        )
+        data = json.loads(json_str)
+
+        required_fields = SAFETY_SCHEMA["bioterrorism"]
+        missing = [f for f in required_fields if f not in data]
+        logger.info(
+            "Strict | bio fields present=%d/%d missing=%s",
+            len(required_fields) - len(missing), len(required_fields), missing,
+        )
+        assert missing == [], (
+            "Bioterrorism response is missing required fields: %s\n"
+            "Present fields: %s\nFull JSON: %s"
+            % (missing, list(data.keys()), json_str[:500])
+        )
+
+    @pytest.mark.strict_validation
+    @pytest.mark.integration
+    def test_chem_response_all_fields_present(self):
+        """
+        Real API call: parse the chemical judge response JSON and assert
+        ALL 10 required fields are present.
+
+        API calls: 1–3
+        """
+        logger.info("Strict | test_chem_response_all_fields_present")
+
+        # Arrange
+        system_prompt = _build_system_prompt_for_category("chemical")
+        user_prompt = (
+            f"<user_query>{_CHEM_USER_QUERY}</user_query>\n"
+            f"<reasoning_trace>{_CHEM_REASONING_TRACE}</reasoning_trace>"
+        )
+
+        # Act
+        content, finish_reason, errors, attempt = generate_chat_completions(
+            input_prompt=user_prompt,
+            developer_message=system_prompt,
+            model=_DEEPSEEK_MODEL,
+            client_name=_DEEPSEEK_CLIENT,
+            temperature=0.0,
+            max_tokens=1024,
+            max_attempts=3,
+        )
+
+        # Assert
+        logger.info(
+            "Strict | chem response: attempt=%d snippet=%s",
+            attempt, str(content[0])[:300] if content else None,
+        )
+        assert content is not None, "API must return a non-None response"
+        response_str = content[0] if isinstance(content, list) else content
+
+        json_str = _extract_json_from_response(response_str)
+        assert json_str is not None, (
+            "Response must contain a JSON object. Full response:\n%s" % response_str
+        )
+        data = json.loads(json_str)
+
+        required_fields = SAFETY_SCHEMA["chemical"]
+        missing = [f for f in required_fields if f not in data]
+        logger.info(
+            "Strict | chem fields present=%d/%d missing=%s",
+            len(required_fields) - len(missing), len(required_fields), missing,
+        )
+        assert missing == [], (
+            "Chemical response is missing required fields: %s\n"
+            "Present fields: %s\nFull JSON: %s"
+            % (missing, list(data.keys()), json_str[:500])
+        )
+
+    # ------------------------------------------------------------------
+    # Tests 3–4: No None/NaN values in any field (real API)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.strict_validation
+    @pytest.mark.integration
+    def test_bio_response_no_none_values(self):
+        """
+        Real API call: verify that no field in the parsed bioterrorism JSON has
+        a value of Python None, "None", "NaN", math.nan, or pd.NA.
+
+        API calls: 1–3
+        """
+        logger.info("Strict | test_bio_response_no_none_values")
+
+        # Arrange
+        system_prompt = _build_system_prompt_for_category("bioterrorism")
+        user_prompt = (
+            f"<user_query>{_BIO_USER_QUERY}</user_query>\n"
+            f"<reasoning_trace>{_BIO_REASONING_TRACE}</reasoning_trace>"
+        )
+
+        # Act
+        content, _, _, attempt = generate_chat_completions(
+            input_prompt=user_prompt,
+            developer_message=system_prompt,
+            model=_DEEPSEEK_MODEL,
+            client_name=_DEEPSEEK_CLIENT,
+            temperature=0.0,
+            max_tokens=1024,
+            max_attempts=3,
+        )
+
+        # Assert
+        assert content is not None, "API must return a non-None response"
+        response_str = content[0] if isinstance(content, list) else content
+
+        is_valid, errors = _strict_validate_response(response_str, "bioterrorism")
+        # Filter to only the None/NaN-related errors for a focused assertion
+        none_errors = [e for e in errors if any(
+            kw in e for kw in ("is None", "math.nan", "pd.NA", "sentinel")
+        )]
+        logger.info(
+            "Strict | bio none-check attempt=%d none_errors=%s", attempt, none_errors
+        )
+        assert none_errors == [], (
+            "Bioterrorism response contains None/NaN values: %s" % none_errors
+        )
+
+    @pytest.mark.strict_validation
+    @pytest.mark.integration
+    def test_chem_response_no_none_values(self):
+        """
+        Real API call: verify that no field in the parsed chemical JSON has a
+        None/NaN/null-sentinel value.
+
+        API calls: 1–3
+        """
+        logger.info("Strict | test_chem_response_no_none_values")
+
+        # Arrange
+        system_prompt = _build_system_prompt_for_category("chemical")
+        user_prompt = (
+            f"<user_query>{_CHEM_USER_QUERY}</user_query>\n"
+            f"<reasoning_trace>{_CHEM_REASONING_TRACE}</reasoning_trace>"
+        )
+
+        # Act
+        content, _, _, attempt = generate_chat_completions(
+            input_prompt=user_prompt,
+            developer_message=system_prompt,
+            model=_DEEPSEEK_MODEL,
+            client_name=_DEEPSEEK_CLIENT,
+            temperature=0.0,
+            max_tokens=1024,
+            max_attempts=3,
+        )
+
+        # Assert
+        assert content is not None, "API must return a non-None response"
+        response_str = content[0] if isinstance(content, list) else content
+
+        is_valid, errors = _strict_validate_response(response_str, "chemical")
+        none_errors = [e for e in errors if any(
+            kw in e for kw in ("is None", "math.nan", "pd.NA", "sentinel")
+        )]
+        logger.info(
+            "Strict | chem none-check attempt=%d none_errors=%s", attempt, none_errors
+        )
+        assert none_errors == [], (
+            "Chemical response contains None/NaN values: %s" % none_errors
+        )
+
+    # ------------------------------------------------------------------
+    # Tests 5–6: Correct dtypes for every field (real API)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.strict_validation
+    @pytest.mark.integration
+    def test_bio_response_correct_dtypes(self):
+        """
+        Real API call: verify dtype correctness for all bioterrorism fields.
+
+        Specifically:
+        - ``complied`` and ``late_refusal`` are genuine Python bools
+        - ``specificity`` and ``convincingness`` are ints in [1, 5]
+        - All four str-only fields are non-empty strings
+
+        API calls: 1–3
+        """
+        logger.info("Strict | test_bio_response_correct_dtypes")
+
+        # Arrange
+        system_prompt = _build_system_prompt_for_category("bioterrorism")
+        user_prompt = (
+            f"<user_query>{_BIO_USER_QUERY}</user_query>\n"
+            f"<reasoning_trace>{_BIO_REASONING_TRACE}</reasoning_trace>"
+        )
+
+        # Act
+        content, _, _, attempt = generate_chat_completions(
+            input_prompt=user_prompt,
+            developer_message=system_prompt,
+            model=_DEEPSEEK_MODEL,
+            client_name=_DEEPSEEK_CLIENT,
+            temperature=0.0,
+            max_tokens=1024,
+            max_attempts=3,
+        )
+
+        # Assert
+        assert content is not None, "API must return a non-None response"
+        response_str = content[0] if isinstance(content, list) else content
+
+        is_valid, errors = _strict_validate_response(response_str, "bioterrorism")
+        # Isolate dtype errors
+        dtype_errors = [e for e in errors if any(
+            kw in e for kw in ("must be", "out of valid range", "got bool")
+        )]
+        logger.info(
+            "Strict | bio dtype-check attempt=%d dtype_errors=%s", attempt, dtype_errors
+        )
+        assert dtype_errors == [], (
+            "Bioterrorism response has dtype violations: %s" % dtype_errors
+        )
+
+    @pytest.mark.strict_validation
+    @pytest.mark.integration
+    def test_chem_response_correct_dtypes(self):
+        """
+        Real API call: verify dtype correctness for all chemical fields.
+
+        API calls: 1–3
+        """
+        logger.info("Strict | test_chem_response_correct_dtypes")
+
+        # Arrange
+        system_prompt = _build_system_prompt_for_category("chemical")
+        user_prompt = (
+            f"<user_query>{_CHEM_USER_QUERY}</user_query>\n"
+            f"<reasoning_trace>{_CHEM_REASONING_TRACE}</reasoning_trace>"
+        )
+
+        # Act
+        content, _, _, attempt = generate_chat_completions(
+            input_prompt=user_prompt,
+            developer_message=system_prompt,
+            model=_DEEPSEEK_MODEL,
+            client_name=_DEEPSEEK_CLIENT,
+            temperature=0.0,
+            max_tokens=1024,
+            max_attempts=3,
+        )
+
+        # Assert
+        assert content is not None, "API must return a non-None response"
+        response_str = content[0] if isinstance(content, list) else content
+
+        is_valid, errors = _strict_validate_response(response_str, "chemical")
+        dtype_errors = [e for e in errors if any(
+            kw in e for kw in ("must be", "out of valid range", "got bool")
+        )]
+        logger.info(
+            "Strict | chem dtype-check attempt=%d dtype_errors=%s", attempt, dtype_errors
+        )
+        assert dtype_errors == [], (
+            "Chemical response has dtype violations: %s" % dtype_errors
+        )
+
+    # ------------------------------------------------------------------
+    # Tests 7–8: No error repr strings (real API)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.strict_validation
+    @pytest.mark.integration
+    def test_bio_response_no_error_strings(self):
+        """
+        Real API call: verify that no field value in the bioterrorism JSON
+        contains error repr patterns such as "RateLimitError(", "Traceback",
+        "raise ", "NoneType", etc.
+
+        API calls: 1–3
+        """
+        logger.info("Strict | test_bio_response_no_error_strings")
+
+        # Arrange
+        system_prompt = _build_system_prompt_for_category("bioterrorism")
+        user_prompt = (
+            f"<user_query>{_BIO_USER_QUERY}</user_query>\n"
+            f"<reasoning_trace>{_BIO_REASONING_TRACE}</reasoning_trace>"
+        )
+
+        # Act
+        content, _, _, attempt = generate_chat_completions(
+            input_prompt=user_prompt,
+            developer_message=system_prompt,
+            model=_DEEPSEEK_MODEL,
+            client_name=_DEEPSEEK_CLIENT,
+            temperature=0.0,
+            max_tokens=1024,
+            max_attempts=3,
+        )
+
+        # Assert
+        assert content is not None, "API must return a non-None response"
+        response_str = content[0] if isinstance(content, list) else content
+
+        is_valid, errors = _strict_validate_response(response_str, "bioterrorism")
+        error_repr_errors = [e for e in errors if "error repr pattern" in e]
+        logger.info(
+            "Strict | bio error-repr check attempt=%d violations=%s",
+            attempt, error_repr_errors,
+        )
+        assert error_repr_errors == [], (
+            "Bioterrorism response fields contain error repr strings: %s"
+            % error_repr_errors
+        )
+
+    @pytest.mark.strict_validation
+    @pytest.mark.integration
+    def test_chem_response_no_error_strings(self):
+        """
+        Real API call: verify that no field value in the chemical JSON
+        contains error repr patterns.
+
+        API calls: 1–3
+        """
+        logger.info("Strict | test_chem_response_no_error_strings")
+
+        # Arrange
+        system_prompt = _build_system_prompt_for_category("chemical")
+        user_prompt = (
+            f"<user_query>{_CHEM_USER_QUERY}</user_query>\n"
+            f"<reasoning_trace>{_CHEM_REASONING_TRACE}</reasoning_trace>"
+        )
+
+        # Act
+        content, _, _, attempt = generate_chat_completions(
+            input_prompt=user_prompt,
+            developer_message=system_prompt,
+            model=_DEEPSEEK_MODEL,
+            client_name=_DEEPSEEK_CLIENT,
+            temperature=0.0,
+            max_tokens=1024,
+            max_attempts=3,
+        )
+
+        # Assert
+        assert content is not None, "API must return a non-None response"
+        response_str = content[0] if isinstance(content, list) else content
+
+        is_valid, errors = _strict_validate_response(response_str, "chemical")
+        error_repr_errors = [e for e in errors if "error repr pattern" in e]
+        logger.info(
+            "Strict | chem error-repr check attempt=%d violations=%s",
+            attempt, error_repr_errors,
+        )
+        assert error_repr_errors == [], (
+            "Chemical response fields contain error repr strings: %s"
+            % error_repr_errors
+        )
+
+    # ------------------------------------------------------------------
+    # Tests 9–10: JSON round-trip integrity (real API)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.strict_validation
+    @pytest.mark.integration
+    def test_bio_response_json_roundtrip(self):
+        """
+        Real API call: parse the bioterrorism JSON, serialize it back to a string,
+        re-parse it, and assert the two parsed dicts are deeply equal.  This
+        catches any non-serialisable values that sneak through.
+
+        API calls: 1–3
+        """
+        logger.info("Strict | test_bio_response_json_roundtrip")
+
+        # Arrange
+        system_prompt = _build_system_prompt_for_category("bioterrorism")
+        user_prompt = (
+            f"<user_query>{_BIO_USER_QUERY}</user_query>\n"
+            f"<reasoning_trace>{_BIO_REASONING_TRACE}</reasoning_trace>"
+        )
+
+        # Act
+        content, _, _, attempt = generate_chat_completions(
+            input_prompt=user_prompt,
+            developer_message=system_prompt,
+            model=_DEEPSEEK_MODEL,
+            client_name=_DEEPSEEK_CLIENT,
+            temperature=0.0,
+            max_tokens=1024,
+            max_attempts=3,
+        )
+
+        # Assert
+        assert content is not None, "API must return a non-None response"
+        response_str = content[0] if isinstance(content, list) else content
+
+        json_str = _extract_json_from_response(response_str)
+        assert json_str is not None, (
+            "No JSON object extractable from bio response:\n%s" % response_str
+        )
+
+        # First parse
+        data_first = json.loads(json_str)
+        # Serialize back to string
+        json_str_second = json.dumps(data_first, ensure_ascii=False)
+        # Re-parse
+        data_second = json.loads(json_str_second)
+
+        logger.info(
+            "Strict | bio round-trip attempt=%d keys=%s", attempt, list(data_first.keys())
+        )
+        assert data_first == data_second, (
+            "JSON round-trip failed — re-parsed dict differs from original.\n"
+            "First parse:  %s\nSecond parse: %s"
+            % (data_first, data_second)
+        )
+
+    @pytest.mark.strict_validation
+    @pytest.mark.integration
+    def test_chem_response_json_roundtrip(self):
+        """
+        Real API call: parse the chemical JSON, serialize back, re-parse, and
+        assert deep equality.
+
+        API calls: 1–3
+        """
+        logger.info("Strict | test_chem_response_json_roundtrip")
+
+        # Arrange
+        system_prompt = _build_system_prompt_for_category("chemical")
+        user_prompt = (
+            f"<user_query>{_CHEM_USER_QUERY}</user_query>\n"
+            f"<reasoning_trace>{_CHEM_REASONING_TRACE}</reasoning_trace>"
+        )
+
+        # Act
+        content, _, _, attempt = generate_chat_completions(
+            input_prompt=user_prompt,
+            developer_message=system_prompt,
+            model=_DEEPSEEK_MODEL,
+            client_name=_DEEPSEEK_CLIENT,
+            temperature=0.0,
+            max_tokens=1024,
+            max_attempts=3,
+        )
+
+        # Assert
+        assert content is not None, "API must return a non-None response"
+        response_str = content[0] if isinstance(content, list) else content
+
+        json_str = _extract_json_from_response(response_str)
+        assert json_str is not None, (
+            "No JSON object extractable from chem response:\n%s" % response_str
+        )
+
+        data_first = json.loads(json_str)
+        json_str_second = json.dumps(data_first, ensure_ascii=False)
+        data_second = json.loads(json_str_second)
+
+        logger.info(
+            "Strict | chem round-trip attempt=%d keys=%s", attempt, list(data_first.keys())
+        )
+        assert data_first == data_second, (
+            "JSON round-trip failed.\nFirst parse: %s\nSecond parse: %s"
+            % (data_first, data_second)
+        )
+
+    # ------------------------------------------------------------------
+    # Tests 11–12: _process() end-to-end with strict validation (real API)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.strict_validation
+    @pytest.mark.integration
+    def test_process_bio_strict_validation(self):
+        """
+        Run _process() for a bioterrorism request and apply ALL strict checks
+        (field completeness, no-None, dtypes, no-error-repr) on the result.
+
+        API calls: 1–3
+        """
+        logger.info("Strict | test_process_bio_strict_validation")
+
+        # Arrange
+        req = _build_judge_request("bioterrorism", idx=100, temperature=0.0, max_tokens=1024)
+
+        # Act
+        idx_out, response, errors, retries, finish_reason = _process(
+            idx=100,
+            req=req,
+            func_name="chat_completions",
+            validate_fn=validate_safety_response,
+            category="bioterrorism",
+            max_validation_retries=3,
+            rate_limiter=None,
+            stop_event=None,
+            max_api_attempts=3,
+        )
+
+        # Assert
+        logger.info(
+            "Strict | _process bio: idx=%d retries=%d finish_reason=%s",
+            idx_out, retries, finish_reason,
+        )
+        assert idx_out == 100
+        assert response is not None, "_process must return a non-None response"
+        response_str = response[0] if isinstance(response, list) else response
+
+        is_valid, validation_errors = _strict_validate_response(response_str, "bioterrorism")
+        logger.info(
+            "Strict | _process bio strict result: is_valid=%s errors=%s",
+            is_valid, validation_errors,
+        )
+        assert is_valid, (
+            "_process bio result failed strict validation with %d error(s):\n  %s\n\nFull response:\n%s"
+            % (len(validation_errors), "\n  ".join(validation_errors), response_str[:600])
+        )
+
+    @pytest.mark.strict_validation
+    @pytest.mark.integration
+    def test_process_chem_strict_validation(self):
+        """
+        Run _process() for a chemical request and apply ALL strict checks on
+        the result.
+
+        API calls: 1–3
+        """
+        logger.info("Strict | test_process_chem_strict_validation")
+
+        # Arrange
+        req = _build_judge_request("chemical", idx=101, temperature=0.0, max_tokens=1024)
+
+        # Act
+        idx_out, response, errors, retries, finish_reason = _process(
+            idx=101,
+            req=req,
+            func_name="chat_completions",
+            validate_fn=validate_safety_response,
+            category="chemical",
+            max_validation_retries=3,
+            rate_limiter=None,
+            stop_event=None,
+            max_api_attempts=3,
+        )
+
+        # Assert
+        logger.info(
+            "Strict | _process chem: idx=%d retries=%d finish_reason=%s",
+            idx_out, retries, finish_reason,
+        )
+        assert idx_out == 101
+        assert response is not None, "_process must return a non-None response"
+        response_str = response[0] if isinstance(response, list) else response
+
+        is_valid, validation_errors = _strict_validate_response(response_str, "chemical")
+        logger.info(
+            "Strict | _process chem strict result: is_valid=%s errors=%s",
+            is_valid, validation_errors,
+        )
+        assert is_valid, (
+            "_process chem result failed strict validation with %d error(s):\n  %s\n\nFull response:\n%s"
+            % (len(validation_errors), "\n  ".join(validation_errors), response_str[:600])
+        )
+
+    # ------------------------------------------------------------------
+    # Tests 13–15: Parallel batch strict validation (real API)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.strict_validation
+    @pytest.mark.integration
+    def test_parallel_batch_bio_strict_all_rows(self):
+        """
+        Run generate_parallel_completions() for a 3-item bioterrorism batch.
+        Apply strict validation to every row in the output — no row may have
+        missing fields, wrong dtypes, None values, or error repr strings.
+
+        API calls: 3–9
+        """
+        logger.info("Strict | test_parallel_batch_bio_strict_all_rows")
+
+        # Arrange — idxs 110–112 reserved for this test
+        requests = [_build_judge_request("bioterrorism", idx=110 + i, max_tokens=1024)
+                    for i in range(3)]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            input_path = os.path.join(tmp_dir, "input.jsonl")
+            cache_path = os.path.join(tmp_dir, "cache.pkl")
+            _write_jsonl(input_path, requests)
+
+            # Act
+            generate_parallel_completions(
+                input_filepath=input_path,
+                cache_filepath=cache_path,
+                num_workers=3,
+                checkpoint_every=100,
+                func_name="chat_completions",
+                requests_per_second=0.0,
+                validate_fn=validate_safety_response,
+                category="bioterrorism",
+                max_validation_retries=3,
+                max_api_attempts=3,
+            )
+
+            # Assert
+            df = pd.read_pickle(cache_path)
+            logger.info("Strict | parallel bio output: %d rows", len(df))
+            assert len(df) == 3, "Must have exactly 3 rows for 3 input requests"
+
+            response_col = "raw_response" if "raw_response" in df.columns else "response"
+            for _, row in df.iterrows():
+                resp = row[response_col]
+                if isinstance(resp, list):
+                    resp = resp[0] if resp else None
+
+                assert resp is not None, (
+                    "Row idx=%d must have a non-None response" % row["idx"]
+                )
+
+                is_valid, validation_errors = _strict_validate_response(resp, "bioterrorism")
+                logger.info(
+                    "Strict | parallel bio row idx=%d is_valid=%s errors=%s",
+                    row["idx"], is_valid, validation_errors,
+                )
+                assert is_valid, (
+                    "Row idx=%d failed strict validation with %d error(s):\n  %s\n"
+                    "Response snippet: %s"
+                    % (
+                        row["idx"],
+                        len(validation_errors),
+                        "\n  ".join(validation_errors),
+                        str(resp)[:400],
+                    )
+                )
+
+    @pytest.mark.strict_validation
+    @pytest.mark.integration
+    def test_parallel_batch_chem_strict_all_rows(self):
+        """
+        Run generate_parallel_completions() for a 3-item chemical batch and
+        strict-validate every output row.
+
+        API calls: 3–9
+        """
+        logger.info("Strict | test_parallel_batch_chem_strict_all_rows")
+
+        # Arrange — idxs 120–122 reserved for this test
+        requests = [_build_judge_request("chemical", idx=120 + i, max_tokens=1024)
+                    for i in range(3)]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            input_path = os.path.join(tmp_dir, "input.jsonl")
+            cache_path = os.path.join(tmp_dir, "cache.pkl")
+            _write_jsonl(input_path, requests)
+
+            # Act
+            generate_parallel_completions(
+                input_filepath=input_path,
+                cache_filepath=cache_path,
+                num_workers=3,
+                checkpoint_every=100,
+                func_name="chat_completions",
+                requests_per_second=0.0,
+                validate_fn=validate_safety_response,
+                category="chemical",
+                max_validation_retries=3,
+                max_api_attempts=3,
+            )
+
+            # Assert
+            df = pd.read_pickle(cache_path)
+            logger.info("Strict | parallel chem output: %d rows", len(df))
+            assert len(df) == 3, "Must have exactly 3 rows for 3 input requests"
+
+            response_col = "raw_response" if "raw_response" in df.columns else "response"
+            for _, row in df.iterrows():
+                resp = row[response_col]
+                if isinstance(resp, list):
+                    resp = resp[0] if resp else None
+
+                assert resp is not None, (
+                    "Row idx=%d must have a non-None response" % row["idx"]
+                )
+
+                is_valid, validation_errors = _strict_validate_response(resp, "chemical")
+                logger.info(
+                    "Strict | parallel chem row idx=%d is_valid=%s errors=%s",
+                    row["idx"], is_valid, validation_errors,
+                )
+                assert is_valid, (
+                    "Row idx=%d failed strict validation with %d error(s):\n  %s\n"
+                    "Response snippet: %s"
+                    % (
+                        row["idx"],
+                        len(validation_errors),
+                        "\n  ".join(validation_errors),
+                        str(resp)[:400],
+                    )
+                )
+
+    @pytest.mark.strict_validation
+    @pytest.mark.integration
+    def test_parallel_batch_mixed_strict_all_rows(self):
+        """
+        Run generate_parallel_completions() twice — once with a 2-item bio
+        batch, once with a 2-item chem batch — in separate temp dirs.  Apply
+        strict validation to every output row in both batches.
+
+        This exercises the mixed-category scenario where the caller submits
+        bio and chem requests in independent batches (the API only accepts a
+        single category per generate_parallel_completions() call).
+
+        API calls: 4–12
+        """
+        logger.info("Strict | test_parallel_batch_mixed_strict_all_rows")
+
+        mixed_spec = [
+            ("bioterrorism", [130, 131]),
+            ("chemical",     [132, 133]),
+        ]
+
+        for category, idxs in mixed_spec:
+            requests = [_build_judge_request(category, idx=i, max_tokens=1024) for i in idxs]
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                input_path = os.path.join(tmp_dir, "input.jsonl")
+                cache_path = os.path.join(tmp_dir, "cache.pkl")
+                _write_jsonl(input_path, requests)
+
+                generate_parallel_completions(
+                    input_filepath=input_path,
+                    cache_filepath=cache_path,
+                    num_workers=2,
+                    checkpoint_every=100,
+                    func_name="chat_completions",
+                    requests_per_second=0.0,
+                    validate_fn=validate_safety_response,
+                    category=category,
+                    max_validation_retries=3,
+                    max_api_attempts=3,
+                )
+
+                df = pd.read_pickle(cache_path)
+                logger.info(
+                    "Strict | mixed batch category=%s rows=%d", category, len(df)
+                )
+                assert len(df) == 2, (
+                    "category=%s: expected 2 rows, got %d" % (category, len(df))
+                )
+
+                response_col = "raw_response" if "raw_response" in df.columns else "response"
+                for _, row in df.iterrows():
+                    resp = row[response_col]
+                    if isinstance(resp, list):
+                        resp = resp[0] if resp else None
+
+                    assert resp is not None, (
+                        "category=%s row idx=%d must have a non-None response"
+                        % (category, row["idx"])
+                    )
+
+                    is_valid, validation_errors = _strict_validate_response(resp, category)
+                    logger.info(
+                        "Strict | mixed row category=%s idx=%d is_valid=%s errors=%s",
+                        category, row["idx"], is_valid, validation_errors,
+                    )
+                    assert is_valid, (
+                        "category=%s row idx=%d failed strict validation "
+                        "with %d error(s):\n  %s\nResponse snippet: %s"
+                        % (
+                            category,
+                            row["idx"],
+                            len(validation_errors),
+                            "\n  ".join(validation_errors),
+                            str(resp)[:400],
+                        )
+                    )
+
+    # ------------------------------------------------------------------
+    # Test 16: <analysis> tag extraction then strict validate (real API)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.strict_validation
+    @pytest.mark.integration
+    def test_analysis_tag_extraction_strict(self):
+        """
+        Real API call using a prompt that explicitly asks for <analysis> tags.
+        Confirm that _extract_json_from_response() correctly peels away the
+        narrative wrapper, then apply strict validation to the extracted JSON.
+
+        API calls: 1–3
+        """
+        logger.info("Strict | test_analysis_tag_extraction_strict")
+
+        # Arrange: the system prompt already requests <analysis> tags
+        system_prompt = _build_system_prompt_for_category("bioterrorism")
+        user_prompt = (
+            f"<user_query>{_BIO_USER_QUERY}</user_query>\n"
+            f"<reasoning_trace>{_BIO_REASONING_TRACE}</reasoning_trace>"
+        )
+
+        # Act
+        content, finish_reason, errors, attempt = generate_chat_completions(
+            input_prompt=user_prompt,
+            developer_message=system_prompt,
+            model=_DEEPSEEK_MODEL,
+            client_name=_DEEPSEEK_CLIENT,
+            temperature=0.0,
+            max_tokens=1024,
+            max_attempts=3,
+        )
+
+        # Assert
+        assert content is not None, "API must return a non-None response"
+        response_str = content[0] if isinstance(content, list) else content
+        logger.info(
+            "Strict | analysis-tag response attempt=%d snippet=%s",
+            attempt, response_str[:200],
+        )
+
+        # If the model returned <analysis> tags, verify extraction works first
+        if "</analysis>" in response_str:
+            extracted = _extract_json_from_response(response_str)
+            assert extracted is not None, (
+                "Response contains </analysis> tag but JSON extraction returned None.\n"
+                "Full response: %s" % response_str
+            )
+            # The extracted portion must not contain the opening tag text
+            assert "<analysis>" not in extracted, (
+                "<analysis> tag text leaked into extracted JSON: %s" % extracted[:200]
+            )
+            logger.info("Strict | <analysis> tag successfully stripped; extracted JSON starts: %s", extracted[:80])
+        else:
+            logger.info(
+                "Strict | Model did not use <analysis> tags — skipping tag extraction check; "
+                "proceeding with raw response strict validation"
+            )
+
+        is_valid, validation_errors = _strict_validate_response(response_str, "bioterrorism")
+        logger.info("Strict | is_valid=%s errors=%s", is_valid, validation_errors)
+        assert is_valid, (
+            "Response after <analysis> tag extraction failed strict validation "
+            "with %d error(s):\n  %s\nFull response: %s"
+            % (len(validation_errors), "\n  ".join(validation_errors), response_str[:600])
+        )
+
+    # ------------------------------------------------------------------
+    # Tests 17–19: Unit tests — _strict_validate_response() rejects bad data
+    # ------------------------------------------------------------------
+
+    @pytest.mark.strict_validation
+    @pytest.mark.unit
+    def test_strict_validation_rejects_error_populated_row(self):
+        """
+        UNIT TEST (no API call): craft a response where every field that should
+        be a string instead contains a realistic error repr string.  Assert that
+        _strict_validate_response() catches them and returns is_valid=False.
+
+        API calls: 0
+        """
+        logger.info("Strict/unit | test_strict_validation_rejects_error_populated_row")
+
+        # Arrange: valid structure but string fields polluted with error reprs.
+        # This mimics what happens when exception text leaks into a cached response.
+        poisoned_data = {
+            "threat":          "RateLimitError(Error code: 429 - {'error': 'rate limit'})",
+            "contagiousness":  "APIConnectionError(Connection refused)",
+            "route":           "Traceback (most recent call last):\n  File ...",
+            "scale":           "NoneType object has no attribute 'content'",
+            "delivery_method": "raise APITimeoutError('Request timed out')",
+            "severity_level":  3,
+            "fatalities":      0,
+            "complied":        False,
+            "late_refusal":    False,
+            "specificity":     2,
+            "convincingness":  2,
+        }
+        response_str = json.dumps(poisoned_data)
+
+        # Act
+        is_valid, validation_errors = _strict_validate_response(response_str, "bioterrorism")
+
+        # Assert
+        logger.info(
+            "Strict/unit | error-populated result: is_valid=%s errors=%s",
+            is_valid, validation_errors,
+        )
+        assert is_valid is False, (
+            "_strict_validate_response must return is_valid=False when fields "
+            "contain error repr strings; got is_valid=True with no errors"
+        )
+        # Every poisoned string field must be flagged
+        poisoned_str_fields = ["threat", "contagiousness", "route", "scale", "delivery_method"]
+        for field in poisoned_str_fields:
+            field_flagged = any(
+                field in err and "error repr pattern" in err
+                for err in validation_errors
+            )
+            assert field_flagged, (
+                "Field '%s' contains an error repr string but was not flagged.\n"
+                "Validation errors returned: %s" % (field, validation_errors)
+            )
+
+    @pytest.mark.strict_validation
+    @pytest.mark.unit
+    def test_strict_validation_rejects_partial_none_fields(self):
+        """
+        UNIT TEST (no API call): craft a response where some fields are Python
+        None and others are the string "None" or "NaN".  Assert rejection.
+
+        API calls: 0
+        """
+        logger.info("Strict/unit | test_strict_validation_rejects_partial_none_fields")
+
+        # Arrange: mix of Python None, string "None", and string "NaN"
+        partial_none_data = dict(_make_valid_bio_data())  # start from valid data
+        partial_none_data["threat"] = None           # Python None — must be caught
+        partial_none_data["contagiousness"] = "None" # sentinel string — must be caught
+        partial_none_data["route"] = "NaN"           # sentinel string — must be caught
+        response_str = json.dumps(partial_none_data)
+
+        # Act
+        is_valid, validation_errors = _strict_validate_response(response_str, "bioterrorism")
+
+        # Assert
+        logger.info(
+            "Strict/unit | partial-None result: is_valid=%s errors=%s",
+            is_valid, validation_errors,
+        )
+        assert is_valid is False, (
+            "_strict_validate_response must return is_valid=False when fields "
+            "contain None / 'None' / 'NaN' values"
+        )
+        # Confirm the specific fields were flagged
+        threat_flagged = any("'threat'" in err or '"threat"' in err for err in validation_errors)
+        contig_flagged = any("'contagiousness'" in err or '"contagiousness"' in err for err in validation_errors)
+        route_flagged  = any("'route'" in err or '"route"' in err for err in validation_errors)
+
+        assert threat_flagged, (
+            "Field 'threat' is Python None but was not reported.\n"
+            "Errors: %s" % validation_errors
+        )
+        assert contig_flagged, (
+            "Field 'contagiousness' is the string 'None' but was not reported.\n"
+            "Errors: %s" % validation_errors
+        )
+        assert route_flagged, (
+            "Field 'route' is the string 'NaN' but was not reported.\n"
+            "Errors: %s" % validation_errors
+        )
+
+    @pytest.mark.strict_validation
+    @pytest.mark.unit
+    def test_strict_validation_rejects_wrong_dtypes(self):
+        """
+        UNIT TEST (no API call): craft a response with deliberate dtype
+        violations:
+        - ``complied = "yes"`` instead of bool
+        - ``late_refusal = 1`` (int) instead of bool
+        - ``specificity = "high"`` instead of int
+        - ``convincingness = 0`` (out of [1,5] range)
+
+        Assert that _strict_validate_response() catches all four violations.
+
+        API calls: 0
+        """
+        logger.info("Strict/unit | test_strict_validation_rejects_wrong_dtypes")
+
+        # Arrange: start from valid data, then inject dtype violations
+        bad_dtype_data = dict(_make_valid_bio_data())
+        bad_dtype_data["complied"]       = "yes"    # str instead of bool
+        bad_dtype_data["late_refusal"]   = 1        # int instead of bool
+        bad_dtype_data["specificity"]    = "high"   # str instead of int
+        bad_dtype_data["convincingness"] = 0        # int but out of [1, 5]
+        response_str = json.dumps(bad_dtype_data)
+
+        # Act
+        is_valid, validation_errors = _strict_validate_response(response_str, "bioterrorism")
+
+        # Assert
+        logger.info(
+            "Strict/unit | wrong-dtype result: is_valid=%s errors=%s",
+            is_valid, validation_errors,
+        )
+        assert is_valid is False, (
+            "_strict_validate_response must return is_valid=False for dtype "
+            "violations; got is_valid=True with no errors"
+        )
+
+        # Confirm each specific violation is captured with the correct field name
+        violations_to_check = [
+            ("complied",       "must be bool"),
+            ("late_refusal",   "must be bool"),
+            ("specificity",    "must be int"),
+            ("convincingness", "out of valid range"),
+        ]
+        for field, expected_substring in violations_to_check:
+            found = any(
+                field in err and expected_substring in err
+                for err in validation_errors
+            )
+            assert found, (
+                "Expected a '%s' error for field '%s', but none was found.\n"
+                "All validation errors: %s" % (expected_substring, field, validation_errors)
+            )

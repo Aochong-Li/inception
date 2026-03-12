@@ -17,3 +17,6 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "unit: marks tests that run without external dependencies"
     )
+    config.addinivalue_line(
+        "markers", "strict_validation: marks tests that apply 100% field completeness, dtype, and error-string checks on API responses"
+    )
