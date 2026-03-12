@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 # Constants
 MODELS = ["DeepSeek-V3.2", "Qwen3-235B-A22B-Thinking-2507", "GLM-4.6"]
-DATA_DIR = _parent_dir / "max_iterations_5"
+DATA_DIR = _eval_dir / "inception_data" / "max_iterations_5" / "think"
 RESULTS_BASE = _eval_dir / "eval_three_models_results"
 SAMPLE_FILE = RESULTS_BASE / "sample_indices.json"
 

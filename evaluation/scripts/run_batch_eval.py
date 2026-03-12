@@ -38,7 +38,7 @@ MODELS = [
     "Qwen3-Next-80B-A3B-Thinking",
 ]
 
-DATA_DIR = Path(_parent_dir) / "max_iterations_5"
+DATA_DIR = _eval_dir / "inception_data" / "max_iterations_5" / "think"
 RESULTS_DIR = _eval_dir / "results"
 SAMPLE_FILE = _eval_dir / "sample_indices.json"
 

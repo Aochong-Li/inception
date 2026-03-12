@@ -33,7 +33,7 @@ from evaluation.preprocess_results import get_full_trace
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-DATA_DIR = _parent_dir / "max_iterations_5"
+DATA_DIR = _eval_dir / "inception_data" / "max_iterations_5" / "think"
 SAMPLE_FILE = _eval_dir / "archived" / "eval_three_models_results" / "sample_indices.json"
 OUTPUT_BASE = _eval_dir / "eval_five_judges"
 

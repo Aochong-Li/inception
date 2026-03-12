@@ -14,7 +14,7 @@ uv run python evaluation/scripts/verify_eval_completeness.py
 - `run_five_judges_eval.py` – Five-judge eval using existing preprocessed data
 - `run_reeval_three_models.py` – Re-evaluate failed rows for three models
 - `run_strongreject_three_models.py` – StrongREJECT evaluation on three models
-- `run_strongreject_evals.py` – StrongREJECT for all models in max_iterations_5
+- `run_strongreject_evals.py` – StrongREJECT for all models in evaluation/inception_data/max_iterations_5/think
 - `run_batch_eval.py` – Batch evaluation for all models
 - `run_ablation_eval.py` – Ablation experiments (DeepSeek V3.2)
 - `reeval_failed.py` – Re-evaluate failed safety evaluations across models

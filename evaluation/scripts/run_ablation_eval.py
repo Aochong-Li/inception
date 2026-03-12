@@ -41,7 +41,7 @@ def load_and_prepare_ablation(ablation_tokens: int, n_bio: int = 10, n_chem: int
     """Load ablation data and prepare for evaluation."""
 
     # Load pickle file
-    file_path = f"max_iterations_1/think/architect_initial_max_tokens_{ablation_tokens}/DeepSeek-V3.2.pickle"
+    file_path = _eval_dir / "inception_data" / "max_iterations_1" / "think" / f"architect_initial_max_tokens_{ablation_tokens}" / "DeepSeek-V3.2.pickle"
     df = pd.read_pickle(file_path)
 
     print(f"\nLoaded ablation {ablation_tokens}: {df.shape[0]} samples")
