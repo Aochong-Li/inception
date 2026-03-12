@@ -11,9 +11,14 @@ from typing import Any, Optional
 
 import pandas as pd
 
+# danger_score is in evaluation/
+import sys
+_eval_dir = Path(__file__).parent.parent
+if str(_eval_dir) not in sys.path:
+    sys.path.insert(0, str(_eval_dir))
 from danger_score import compute_strongreject_score_row
 
-BENCHMARK_RESULTS_DIR = Path(__file__).parent.parent / "think-vs-instruct-benchmark" / "evaluation-results" / "benchmark"
+BENCHMARK_RESULTS_DIR = Path(__file__).parent.parent.parent / "think-vs-instruct-benchmark" / "evaluation-results" / "benchmark"
 
 
 def load_model_results(model_dir: Path) -> Optional[pd.DataFrame]:

@@ -18,13 +18,14 @@ load_dotenv()
 import pandas as pd
 
 _script_dir = Path(__file__).parent.resolve()
-_parent_dir = _script_dir.parent.resolve()
+_parent_dir = _script_dir.parent.parent.resolve()
+_eval_dir = _script_dir.parent
 sys.path.insert(0, str(_parent_dir))
 
 from evaluation.preprocess_results import get_full_trace
 
 DATA_DIR = _parent_dir / "max_iterations_5"
-RESULTS_BASE = _script_dir / "evaluation-results"
+RESULTS_BASE = _eval_dir / "evaluation-results"
 
 # Discover all model pickles
 MODELS = sorted(
@@ -59,7 +60,7 @@ def main():
         # Run safety-judge with --strongreject_only
         cmd = [
             sys.executable,
-            str(_script_dir / "safety-judge.py"),
+            str(_eval_dir / "safety-judge.py"),
             "--input_filepath", str(preprocessed_path),
             "--output_dir", str(model_dir),
             "--nick_name", model_name,
@@ -82,7 +83,7 @@ def main():
     # Run danger_score aggregation
     print("\nRunning danger_score.py...")
     subprocess.run(
-        [sys.executable, str(_script_dir / "danger_score.py"), "--results-dir", str(RESULTS_BASE)],
+        [sys.executable, str(_eval_dir / "danger_score.py"), "--results-dir", str(RESULTS_BASE)],
         check=True,
     )
     print("Done.")

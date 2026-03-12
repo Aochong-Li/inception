@@ -16,13 +16,14 @@ import pandas as pd
 
 # Add parent directory to path for imports
 _script_dir = Path(__file__).parent.resolve()
-_parent_dir = _script_dir.parent.resolve()
+_parent_dir = _script_dir.parent.parent.resolve()
+_eval_dir = _script_dir.parent
 if str(_parent_dir) not in sys.path:
     sys.path.insert(0, str(_parent_dir))
 
-# Import get_latest_iteration from preprocess_results.py in same directory
+# Import get_latest_iteration from preprocess_results.py in evaluation/
 import importlib.util
-_preprocess_spec = importlib.util.spec_from_file_location("preprocess_results", _script_dir / "preprocess_results.py")
+_preprocess_spec = importlib.util.spec_from_file_location("preprocess_results", _eval_dir / "preprocess_results.py")
 _preprocess_module = importlib.util.module_from_spec(_preprocess_spec)
 _preprocess_spec.loader.exec_module(_preprocess_module)
 get_full_trace = _preprocess_module.get_full_trace
@@ -38,8 +39,8 @@ MODELS = [
 ]
 
 DATA_DIR = Path(_parent_dir) / "max_iterations_5"
-RESULTS_DIR = Path(_script_dir) / "results"
-SAMPLE_FILE = Path(_script_dir) / "sample_indices.json"
+RESULTS_DIR = _eval_dir / "results"
+SAMPLE_FILE = _eval_dir / "sample_indices.json"
 
 
 def generate_sample_indices(seed: int = 42) -> dict:
@@ -96,7 +97,7 @@ def run_safety_judge(model_name: str, preprocessed_path: Path, eval_model: str, 
 
     cmd = [
         sys.executable,
-        str(_script_dir / "safety-judge.py"),
+        str(_eval_dir / "safety-judge.py"),
         "--input_filepath", str(preprocessed_path),
         "--output_dir", str(output_dir),
         "--nick_name", model_name,

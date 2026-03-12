@@ -28,14 +28,15 @@ if not os.environ.get("OPENROUTER_API_KEY"):
 import pandas as pd
 
 _script_dir = Path(__file__).parent.resolve()
-_parent_dir = _script_dir.parent.resolve()
+_parent_dir = _script_dir.parent.parent.resolve()
+_eval_dir = _script_dir.parent
 sys.path.insert(0, str(_parent_dir))
 
 from evaluation.preprocess_results import get_full_trace
 
 DATA_DIR = _parent_dir / "max_iterations_5"
-EXISTING_RESULTS = _script_dir / "eval_three_models_results"
-RESULTS_BASE = _script_dir / "eval_five_judges"
+EXISTING_RESULTS = _eval_dir / "archived" / "eval_three_models_results"
+RESULTS_BASE = _eval_dir / "eval_five_judges"
 SAMPLE_FILE = EXISTING_RESULTS / "sample_indices.json"
 
 TARGET_MODELS = [
@@ -98,7 +99,7 @@ def run_judge_eval(
 
     cmd = [
         sys.executable,
-        str(_script_dir / "safety-judge.py"),
+        str(_eval_dir / "safety-judge.py"),
         "--input_filepath", str(preprocessed_path),
         "--output_dir", str(output_dir),
         "--nick_name", target_model,
@@ -111,7 +112,7 @@ def run_judge_eval(
         "--bioterrorism_label", "wmdp-bio",
         "--rate_limit", "3.0",
         "--max_validation_retries", "3",
-        "--max_tokens", "3072",
+        "--max_tokens", "16000",
     ]
     if overwrite:
         cmd.append("--overwrite")
@@ -167,7 +168,7 @@ def run_aggregation(judge_nick: str):
     subprocess.run(
         [
             sys.executable,
-            str(_script_dir / "danger_score.py"),
+            str(_eval_dir / "danger_score.py"),
             "--results-dir", str(results_dir),
         ],
         check=True,

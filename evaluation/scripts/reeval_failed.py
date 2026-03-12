@@ -22,7 +22,8 @@ import pandas as pd
 
 # Add parent directory to path
 _script_dir = Path(__file__).parent.resolve()
-_parent_dir = _script_dir.parent.resolve()
+_parent_dir = _script_dir.parent.parent.resolve()
+_eval_dir = _script_dir.parent
 if str(_parent_dir) not in sys.path:
     sys.path.insert(0, str(_parent_dir))
 
@@ -136,7 +137,7 @@ def run_reeval_for_model(
 
     cmd = [
         sys.executable,
-        str(_script_dir / "safety-judge.py"),
+        str(_eval_dir / "safety-judge.py"),
         "--input_filepath", input_filepath,
         "--output_dir", str(model_dir),
         "--nick_name", model_dir.name,

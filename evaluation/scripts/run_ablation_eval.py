@@ -18,7 +18,8 @@ load_dotenv()
 
 # Add parent to path
 _script_dir = Path(__file__).parent.resolve()
-_parent_dir = _script_dir.parent.resolve()
+_parent_dir = _script_dir.parent.parent.resolve()
+_eval_dir = _script_dir.parent
 sys.path.insert(0, str(_parent_dir))
 
 # Import safety_judge module directly to avoid vllm import issues
@@ -32,7 +33,7 @@ def _import_module_directly(module_name: str, module_path):
     return module
 
 # Load safety_judge module
-_safety_judge = _import_module_directly("safety_judge", _script_dir / "safety-judge.py")
+_safety_judge = _import_module_directly("safety_judge", _eval_dir / "safety-judge.py")
 SafetyEvaluator = _safety_judge.SafetyEvaluator
 
 
@@ -82,7 +83,7 @@ async def evaluate_ablation(ablation_tokens: int, eval_model: str, client_name: 
 
     # Create output directory for this ablation
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    output_dir = f"evaluation/results/ablation_{ablation_tokens}_{timestamp}"
+    output_dir = str(_eval_dir / "results" / f"ablation_{ablation_tokens}_{timestamp}")
 
     # Initialize SafetyEvaluator
     evaluator = SafetyEvaluator(

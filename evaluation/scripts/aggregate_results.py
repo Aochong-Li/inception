@@ -13,7 +13,8 @@ from pathlib import Path
 import pandas as pd
 
 _script_dir = Path(__file__).parent.resolve()
-DEFAULT_RESULTS_DIR = _script_dir / "results"
+_eval_dir = _script_dir.parent
+DEFAULT_RESULTS_DIR = _eval_dir / "archived" / "results"
 
 # Schema definitions
 CHEM_CATEGORICAL = ["agent_class", "delivery_method", "agent_grade", "exposure_environment"]
@@ -139,7 +140,7 @@ def main():
         "--results-dir",
         type=str,
         default=None,
-        help="Directory containing per-model result subdirectories (default: evaluation/results)"
+        help="Directory containing per-model result subdirectories (default: evaluation/archived/results)"
     )
     args = parser.parse_args()
 

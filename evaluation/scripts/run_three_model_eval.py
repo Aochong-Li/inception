@@ -22,7 +22,8 @@ import pandas as pd
 
 # Add parent directory to path
 _script_dir = Path(__file__).parent.resolve()
-_parent_dir = _script_dir.parent.resolve()
+_parent_dir = _script_dir.parent.parent.resolve()
+_eval_dir = _script_dir.parent
 if str(_parent_dir) not in sys.path:
     sys.path.insert(0, str(_parent_dir))
 
@@ -40,7 +41,7 @@ def _import_module_directly(module_name: str, module_path):
     spec.loader.exec_module(module)
     return module
 
-_safety_judge = _import_module_directly("safety_judge", _script_dir / "safety-judge.py")
+_safety_judge = _import_module_directly("safety_judge", _eval_dir / "safety-judge.py")
 SafetyEvaluator = _safety_judge.SafetyEvaluator
 
 # Configure logging
@@ -50,7 +51,7 @@ logger = logging.getLogger(__name__)
 # Constants
 MODELS = ["DeepSeek-V3.2", "Qwen3-235B-A22B-Thinking-2507", "GLM-4.6"]
 DATA_DIR = _parent_dir / "max_iterations_5"
-RESULTS_BASE = _script_dir / "eval_three_models_results"
+RESULTS_BASE = _eval_dir / "eval_three_models_results"
 SAMPLE_FILE = RESULTS_BASE / "sample_indices.json"
 
 
@@ -219,7 +220,7 @@ def run_aggregation(results_base: Path):
     # Run danger_score.py
     logger.info("\nRunning danger_score.py...")
     subprocess.run(
-        [sys.executable, str(_script_dir / "danger_score.py"), "--results-dir", str(results_base)],
+        [sys.executable, str(_eval_dir / "danger_score.py"), "--results-dir", str(results_base)],
         check=True
     )
 
