@@ -91,7 +91,14 @@ def preprocess_model(model_name: str, sample_indices: list) -> Path:
     return output_path
 
 
-def run_safety_judge(model_name: str, preprocessed_path: Path, eval_model: str, client_name: str):
+def run_safety_judge(
+    model_name: str,
+    preprocessed_path: Path,
+    eval_model: str,
+    client_name: str,
+    requests_per_second: float = 5.0,
+    max_consecutive_refusals: int = 0,
+):
     """Run safety-judge.py on a preprocessed model file using subprocess."""
     output_dir = RESULTS_DIR / model_name
 
@@ -108,6 +115,8 @@ def run_safety_judge(model_name: str, preprocessed_path: Path, eval_model: str, 
         "--chemical_label", "wmdp-chem",
         "--eval_model", eval_model,
         "--client_name", client_name,
+        "--requests_per_second", str(requests_per_second),
+        "--max_consecutive_refusals", str(max_consecutive_refusals),
         "--overwrite",
     ]
 
@@ -130,6 +139,8 @@ def main():
     parser.add_argument("--client_name", default="openai", help="API client to use")
     parser.add_argument("--regenerate_sample", action="store_true", help="Regenerate sample indices")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for sampling")
+    parser.add_argument("--requests_per_second", type=float, default=5.0, help="Rate limit for API calls (passed to safety-judge)")
+    parser.add_argument("--max_consecutive_refusals", type=int, default=0, help="Circuit breaker threshold for judge refusals (0 = disabled)")
     args = parser.parse_args()
 
     # Ensure results directory exists
@@ -153,7 +164,11 @@ def main():
         preprocessed_path = preprocess_model(model_name, all_indices)
 
         # Run safety evaluation
-        run_safety_judge(model_name, preprocessed_path, args.eval_model, args.client_name)
+        run_safety_judge(
+            model_name, preprocessed_path, args.eval_model, args.client_name,
+            requests_per_second=args.requests_per_second,
+            max_consecutive_refusals=args.max_consecutive_refusals,
+        )
 
     print(f"\n{'='*60}")
     print("Batch evaluation complete!")

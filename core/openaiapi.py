@@ -442,10 +442,11 @@ def generate_completions(
     presence_penalty: float = 0.0,
     stop: Optional[List[str]] = None,
     max_attempts: int = 3,
+    rate_limiter: Optional["TokenBucketRateLimiter"] = None,
 ) -> Tuple[Optional[List[str]], Optional[str], List[str], int]:
     """Returns (content, finish_reason, errors, attempt). finish_reason is 'length' when truncated."""
     client = create_client(client_name)
-    
+
     errors: List[str] = []
     for attempt in range(1, max_attempts + 1):
         try:
@@ -459,6 +460,9 @@ def generate_completions(
                     stop=stop,
                 )
             resp = client.completions.create(**kwargs)
+            # Restore rate after a successful call
+            if rate_limiter is not None:
+                rate_limiter.restore()
             c0 = resp.choices[0]
             finish_reason = getattr(c0, "finish_reason", None) or getattr(c0, "stop_reason", None)
             if model == "deepseek-reasoner":
@@ -468,6 +472,25 @@ def generate_completions(
             else:
                 content = [c.text for c in resp.choices]
             return content, finish_reason, errors, attempt
+        except RateLimitError as exc:
+            errors.append(repr(exc))
+            if rate_limiter is not None:
+                rate_limiter.throttle(0.5)
+            if attempt == max_attempts:
+                logger.error("%s – final failure", exc)
+                return None, None, errors, attempt
+            # header‑aware back‑off
+            hdr_delay = None
+            if hasattr(exc, "response") and exc.response is not None:
+                retry_after = exc.response.headers.get("Retry-After")
+                if retry_after:
+                    try:
+                        hdr_delay = float(retry_after)
+                    except ValueError:
+                        hdr_delay = None
+            delay = hdr_delay if hdr_delay else min(30, 2 ** (attempt - 1)) * random.uniform(0.8, 1.2)
+            logger.warning("%s – retry %d/%d in %.1fs", exc, attempt, max_attempts, delay)
+            time.sleep(delay)
         except RETRYABLE as exc:
             errors.append(repr(exc))
             if attempt == max_attempts:
@@ -505,6 +528,7 @@ def _process(
     max_validation_retries: int = 3,
     rate_limiter: Optional[TokenBucketRateLimiter] = None,
     stop_event: Optional[threading.Event] = None,
+    max_api_attempts: int = 3,
 ) -> ResultRow:
     """
     Process a single request with optional response validation and retries.
@@ -518,6 +542,7 @@ def _process(
         max_validation_retries: Max retries if validation fails (default 3)
         rate_limiter: Optional shared TokenBucketRateLimiter; acquire() is called before each API call.
         stop_event: Optional threading.Event; if set, skip this request immediately.
+        max_api_attempts: Max API-level retries per call (default 3).
 
     Returns:
         Tuple of (idx, response, errors, retries)
@@ -529,13 +554,25 @@ def _process(
     body = req["body"]
     all_errors: List[str] = []
 
+    # Store original temperature so validation retries can bump it without accumulation
+    _original_temperature = body.get("temperature", 0.0)
+
     for validation_attempt in range(1, max_validation_retries + 1):
         # Check stop_event before each retry iteration
         if stop_event is not None and stop_event.is_set():
             return idx, None, ["Early stop: skipped"], 0, None
         # Acquire a token from the rate limiter before calling the API
         if rate_limiter is not None:
-            rate_limiter.acquire()
+            acquired = rate_limiter.acquire()
+            if not acquired:
+                logger.warning(
+                    "Rate limiter acquire() timed out for idx %d, proceeding unthrottled",
+                    idx,
+                )
+
+        # Bump temperature on subsequent validation retries (attempt 1 = original,
+        # attempt 2 = original + 0.1, attempt 3 = original + 0.2, …)
+        effective_temperature = _original_temperature + (validation_attempt - 1) * 0.1
 
         if func_name == "chat_completions":
             response, finish_reason, errs, tries = generate_chat_completions(
@@ -543,13 +580,14 @@ def _process(
                 developer_message=body["messages"][0]["content"],
                 model=body["model"],
                 client_name=req["client_name"],
-                temperature=body.get("temperature", 0.0),
+                temperature=effective_temperature,
                 max_tokens=body.get("max_tokens", 1024),
                 n=body.get("n", 1),
                 top_p=body.get("top_p", 1.0),
                 frequency_penalty=body.get("frequency_penalty", 0.0),
                 presence_penalty=body.get("presence_penalty", 0.0),
                 stop=body.get("stop"),
+                max_attempts=max_api_attempts,
                 rate_limiter=rate_limiter,
             )
         elif func_name == "completions":
@@ -557,13 +595,15 @@ def _process(
                 input_prompt=body["prompt"],
                 model=body["model"],
                 client_name=req["client_name"],
-                temperature=body.get("temperature", 0.0),
+                temperature=effective_temperature,
                 max_tokens=body.get("max_tokens", 1024),
                 n=body.get("n", 1),
                 top_p=body.get("top_p", 1.0),
                 frequency_penalty=body.get("frequency_penalty", 0.0),
                 presence_penalty=body.get("presence_penalty", 0.0),
                 stop=body.get("stop"),
+                max_attempts=max_api_attempts,
+                rate_limiter=rate_limiter,
             )
         else:
             raise ValueError(f"Unknown function name: {func_name}")
@@ -611,6 +651,7 @@ def generate_parallel_completions(
     category: Optional[str] = None,
     max_validation_retries: int = 3,
     max_consecutive_refusals: int = 0,
+    max_api_attempts: int = 3,
 ) -> None:
     """
     Run chat completions with a thread pool and checkpoint progress.
@@ -626,6 +667,7 @@ def generate_parallel_completions(
         category: Category for validation (e.g., "bioterrorism", "chemical", "cybersecurity")
         max_validation_retries: Max retries per request if validation fails (default 3)
         max_consecutive_refusals: Stop category after N consecutive judge refusals (0 = disabled)
+        max_api_attempts: Max API-level retries per call passed to _process (default 3)
     """
     with open(input_filepath) as fh:
         requests_all = [json.loads(line) for line in fh]
@@ -640,11 +682,23 @@ def generate_parallel_completions(
         # Backward compat: old pickles lack finish_reason column
         finish_reason_col = 'finish_reason' if 'finish_reason' in df_prev.columns else None
         for r in df_prev.itertuples():
-            if getattr(r, response_col, None) is not None:
+            cached_response = getattr(r, response_col, None)
+            if cached_response is not None:
+                # When a validate_fn and category are provided, re-validate cached
+                # responses so that rows with invalid-but-non-None responses are
+                # re-queued rather than silently skipped.
+                if validate_fn is not None and category is not None:
+                    response_str = cached_response[0] if isinstance(cached_response, list) else cached_response
+                    if not validate_fn(response_str, category):
+                        logger.debug(
+                            "Cached response for idx %d failed re-validation; will re-queue",
+                            int(r.idx),
+                        )
+                        continue  # do not add to done_results → row is re-queued
                 fr = getattr(r, finish_reason_col, None) if finish_reason_col else None
-                done_results.append((int(r.idx), getattr(r, response_col), r.error, r.retries, fr))
+                done_results.append((int(r.idx), cached_response, r.error, r.retries, fr))
         done_idx = {r[0] for r in done_results}
-        logger.info("Loaded %d prior successes", len(done_idx))
+        logger.info("Loaded %d prior successes (re-validation applied: %s)", len(done_idx), validate_fn is not None)
 
     pending = [req for req in requests_all if int(req["custom_id"].split("_")[1]) not in done_idx]
     if not pending:
@@ -684,7 +738,7 @@ def generate_parallel_completions(
             pool.submit(
                 _process, idx, req, func_name,
                 validate_fn, category, max_validation_retries, limiter,
-                stop_event,
+                stop_event, max_api_attempts,
             ): idx
             for idx, req in args_list
         }
