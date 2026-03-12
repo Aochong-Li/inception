@@ -349,7 +349,8 @@ def generate_chat_completions(
     stop: Optional[List[str]] = None,
     max_attempts: int = 3,
     rate_limiter: Optional["TokenBucketRateLimiter"] = None,
-) -> Tuple[Optional[List[str]], List[str], int]:
+) -> Tuple[Optional[List[str]], Optional[str], List[str], int]:
+    """Returns (content, finish_reason, errors, attempt). finish_reason is 'length' when truncated."""
     client = create_client(client_name)
     messages = [
         {"role": "system", "content": developer_message},
@@ -375,11 +376,15 @@ def generate_chat_completions(
             # Restore rate after a successful call
             if rate_limiter is not None:
                 rate_limiter.restore()
+            c0 = resp.choices[0]
+            finish_reason = getattr(c0, "finish_reason", None) or getattr(c0, "stop_reason", None)
             if model == "deepseek-reasoner":
-                return [
+                content = [
                     f"{c.message.reasoning_content}\n</think>\n{c.message.content}" for c in resp.choices
-                ], errors, attempt
-            return [c.message.content for c in resp.choices], errors, attempt
+                ]
+            else:
+                content = [c.message.content for c in resp.choices]
+            return content, finish_reason, errors, attempt
         except RateLimitError as exc:
             errors.append(repr(exc))
             # Signal the shared limiter to back off
@@ -387,7 +392,7 @@ def generate_chat_completions(
                 rate_limiter.throttle(0.5)
             if attempt == max_attempts:
                 logger.error("%s – final failure", exc)
-                return None, errors, attempt
+                return None, None, errors, attempt
             # header‑aware back‑off
             hdr_delay = None
             if hasattr(exc, "response") and exc.response is not None:
@@ -404,7 +409,7 @@ def generate_chat_completions(
             errors.append(repr(exc))
             if attempt == max_attempts:
                 logger.error("%s – final failure", exc)
-                return None, errors, attempt
+                return None, None, errors, attempt
             # header‑aware back‑off
             hdr_delay = None
             if hasattr(exc, "response") and exc.response is not None:
@@ -420,9 +425,9 @@ def generate_chat_completions(
         except Exception as exc:
             errors.append(repr(exc))
             logger.error("Non‑retryable error: %s", exc)
-            return None, errors, attempt
+            return None, None, errors, attempt
 
-    return None, errors, max_attempts
+    return None, None, errors, max_attempts
 
 def generate_completions(
     *,
@@ -437,7 +442,8 @@ def generate_completions(
     presence_penalty: float = 0.0,
     stop: Optional[List[str]] = None,
     max_attempts: int = 3,
-) -> Tuple[Optional[List[str]], List[str], int]:
+) -> Tuple[Optional[List[str]], Optional[str], List[str], int]:
+    """Returns (content, finish_reason, errors, attempt). finish_reason is 'length' when truncated."""
     client = create_client(client_name)
     
     errors: List[str] = []
@@ -453,16 +459,20 @@ def generate_completions(
                     stop=stop,
                 )
             resp = client.completions.create(**kwargs)
+            c0 = resp.choices[0]
+            finish_reason = getattr(c0, "finish_reason", None) or getattr(c0, "stop_reason", None)
             if model == "deepseek-reasoner":
-                return [
+                content = [
                     f"{c.message.reasoning_content}\n</think>\n{c.message.content}" for c in resp.choices
-                ], errors, attempt
-            return [c.text for c in resp.choices], errors, attempt
+                ]
+            else:
+                content = [c.text for c in resp.choices]
+            return content, finish_reason, errors, attempt
         except RETRYABLE as exc:
             errors.append(repr(exc))
             if attempt == max_attempts:
                 logger.error("%s – final failure", exc)
-                return None, errors, attempt
+                return None, None, errors, attempt
             # header‑aware back‑off
             hdr_delay = None
             if hasattr(exc, "response") and exc.response is not None:
@@ -478,13 +488,13 @@ def generate_completions(
         except Exception as exc:
             errors.append(repr(exc))
             logger.error("Non‑retryable error: %s", exc)
-            return None, errors, attempt
+            return None, None, errors, attempt
 
-    return None, errors, max_attempts
+    return None, None, errors, max_attempts
 # ---------------------------------------------------------------------------
 # Parallel helpers
 # ---------------------------------------------------------------------------
-ResultRow = Tuple[int, Optional[List[str]], List[str], int]
+ResultRow = Tuple[int, Optional[List[str]], Optional[List[str]], int, Optional[str]]  # idx, response, error, retries, finish_reason
 
 def _process(
     idx: int,
@@ -514,7 +524,7 @@ def _process(
     """
     # Early stop: skip if circuit breaker has fired
     if stop_event is not None and stop_event.is_set():
-        return idx, None, ["Early stop: skipped"], 0
+        return idx, None, ["Early stop: skipped"], 0, None
 
     body = req["body"]
     all_errors: List[str] = []
@@ -522,13 +532,13 @@ def _process(
     for validation_attempt in range(1, max_validation_retries + 1):
         # Check stop_event before each retry iteration
         if stop_event is not None and stop_event.is_set():
-            return idx, None, ["Early stop: skipped"], 0
+            return idx, None, ["Early stop: skipped"], 0, None
         # Acquire a token from the rate limiter before calling the API
         if rate_limiter is not None:
             rate_limiter.acquire()
 
         if func_name == "chat_completions":
-            response, errs, tries = generate_chat_completions(
+            response, finish_reason, errs, tries = generate_chat_completions(
                 input_prompt=body["messages"][1]["content"],
                 developer_message=body["messages"][0]["content"],
                 model=body["model"],
@@ -543,7 +553,7 @@ def _process(
                 rate_limiter=rate_limiter,
             )
         elif func_name == "completions":
-            response, errs, tries = generate_completions(
+            response, finish_reason, errs, tries = generate_completions(
                 input_prompt=body["prompt"],
                 model=body["model"],
                 client_name=req["client_name"],
@@ -563,16 +573,16 @@ def _process(
 
         # If no response, can't validate - return failure
         if response is None:
-            return idx, None, all_errors if all_errors else None, tries
+            return idx, None, all_errors if all_errors else None, tries, finish_reason
 
         # If no validation function provided, return response as-is
         if validate_fn is None or category is None:
-            return idx, response, all_errors if all_errors else None, tries
+            return idx, response, all_errors if all_errors else None, tries, finish_reason
 
         # Validate response
         response_str = response[0] if isinstance(response, list) else response
         if validate_fn(response_str, category):
-            return idx, response, all_errors if all_errors else None, tries
+            return idx, response, all_errors if all_errors else None, tries, finish_reason
 
         # Validation failed - retry with jitter
         if validation_attempt < max_validation_retries:
@@ -587,7 +597,7 @@ def _process(
             logger.warning("Validation failed for idx %d after %d attempts", idx, max_validation_retries)
             all_errors.append(f"Validation failed after {max_validation_retries} attempts")
 
-    return idx, response, all_errors if all_errors else None, tries
+    return idx, response, all_errors if all_errors else None, tries, finish_reason
 
 def generate_parallel_completions(
     *,
@@ -627,13 +637,12 @@ def generate_parallel_completions(
         df_prev = pd.read_pickle(cache_filepath)
         # Handle both old format (response column) and new format (raw_response column)
         response_col = 'raw_response' if 'raw_response' in df_prev.columns else 'response'
-        done_results.extend(
-            [
-                (int(r.idx), getattr(r, response_col), r.error, r.retries)
-                for r in df_prev.itertuples()
-                if getattr(r, response_col, None) is not None
-            ]
-        )
+        # Backward compat: old pickles lack finish_reason column
+        finish_reason_col = 'finish_reason' if 'finish_reason' in df_prev.columns else None
+        for r in df_prev.itertuples():
+            if getattr(r, response_col, None) is not None:
+                fr = getattr(r, finish_reason_col, None) if finish_reason_col else None
+                done_results.append((int(r.idx), getattr(r, response_col), r.error, r.retries, fr))
         done_idx = {r[0] for r in done_results}
         logger.info("Loaded %d prior successes", len(done_idx))
 
@@ -687,7 +696,7 @@ def generate_parallel_completions(
 
                 # Track refusals if circuit breaker is active
                 if tracker is not None:
-                    _, response, _, _ = result_row
+                    _, response, _, _, _ = result_row
                     tracker.record(is_judge_refusal(response))
 
                     # Cancel remaining pending futures if stopped
@@ -701,7 +710,7 @@ def generate_parallel_completions(
             except Exception as exc:
                 idx = futures[fut]
                 logger.error("Worker crashed on idx %s: %s", idx, exc)
-                results.append((idx, None, [repr(exc)], 0))
+                results.append((idx, None, [repr(exc)], 0, None))
 
             if (i + 1) % checkpoint_every == 0:
                 _save(cache_filepath, results)
@@ -724,6 +733,7 @@ def _save(path: str, rows: List[ResultRow]):
         "response": [r[1] for r in rows],
         "error": [r[2] for r in rows],
         "retries": [r[3] for r in rows],
+        "finish_reason": [r[4] if len(r) > 4 else None for r in rows],
     })
     df.sort_values("idx", inplace=True)
     df.to_pickle(path)

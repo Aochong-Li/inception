@@ -80,7 +80,7 @@ class SafetyEvaluator:
         # API client to use ("openai", "deepseek", "togetherai", "openrouter", "deepinfra")
         client_name: str = "openai",
         temperature: float = 0.0,  # Low temperature for consistent evaluation
-        max_tokens: int = 3072,  # Sufficient for 3-5 paragraph analysis + JSON
+        max_tokens: int = 16000,  # Sufficient for long analysis + JSON; avoids truncation
         requests_per_second: float = 5.0,  # Rate limit for API requests
         max_validation_retries: int = 3,  # Max retries for validation failures
         strongreject_only: bool = False,  # Use StrongREJECT template for all rows
@@ -121,9 +121,8 @@ class SafetyEvaluator:
             "chemical": chemical_label,
             "bioterrorism": bioterrorism_label
         }
-        # Reduce max_tokens for StrongREJECT-only mode (3-field JSON is much shorter)
-        if self.strongreject_only and max_tokens > 512:
-            self.max_tokens = 512
+        # StrongREJECT-only: honor passed max_tokens (e.g. 16000 to avoid truncation).
+        # Previously capped at 512; removed to fix parse failures from truncated JSON.
         self.prompt_loader = PromptLoader()
         self.batches = self._batch_traces_by_category()
 
@@ -189,11 +188,16 @@ class SafetyEvaluator:
         output_df = output_df.copy()
         output_df['raw_response'] = output_df['response'].apply(self._unwrap_response)
 
+        # Backward compat: ensure finish_reason exists (from API; old pickles lack it)
+        if 'finish_reason' not in output_df.columns:
+            output_df['finish_reason'] = None
+
         # Extract analysis text from each response
         output_df['analysis'] = output_df['response'].apply(self._extract_analysis_text)
 
         # Parse JSON from response column
         parsed_data: list[Dict[str, Any]] = []
+        truncated_flags: list[bool] = []
         all_keys: set[str] = set()
 
         for idx, row in output_df.iterrows():
@@ -204,6 +208,7 @@ class SafetyEvaluator:
             response_str = self._unwrap_response(response_str)
             if response_str is None or len(response_str) == 0:
                 parsed_data.append({})
+                truncated_flags.append(False)  # empty is not truncation
                 continue
 
             try:
@@ -287,6 +292,24 @@ class SafetyEvaluator:
                     print(
                         f"  Response string (first 200 chars): {str(response_str)[:200]}")
 
+            # Detect truncation: API signal (finish_reason=="length") or heuristic
+            finish_reason = row.get('finish_reason')
+            if isinstance(finish_reason, float) and pd.isna(finish_reason):
+                finish_reason = None
+            truncated = (str(finish_reason) == "length") if finish_reason else False
+            if not truncated and response_str:
+                # Heuristic: has <analysis> but no </analysis> and no JSON → likely truncated
+                has_analysis_open = "<analysis>" in response_str
+                has_analysis_close = "</analysis>" in response_str
+                has_json_brace = "{" in response_str
+                truncated = bool(has_analysis_open and not has_analysis_close and not has_json_brace)
+            if truncated:
+                logger.warning(
+                    "Truncated response detected for idx %s (finish_reason=%s); "
+                    "filter with df[df['truncated']==True]",
+                    idx, finish_reason,
+                )
+            truncated_flags.append(truncated)
             parsed_data.append(parsed_row)
 
         # Create DataFrame from parsed data — leave missing values as NaN (not string 'None')
@@ -314,7 +337,11 @@ class SafetyEvaluator:
         # Merge parsed columns with original dataframe.
         # Keep 'response' for durability (re-parsing, reeval); raw_response is the unwrapped string.
         output_df = pd.concat([output_df, parsed_df], axis=1)
+        output_df['truncated'] = truncated_flags
 
+        n_truncated = sum(truncated_flags)
+        if n_truncated:
+            logger.warning("TRUNCATION: %d rows have truncated responses; filter with df[df['truncated']==True]", n_truncated)
         logger.info(f"Parsed JSON responses into {len(all_keys)} columns")
         return output_df
 
@@ -527,7 +554,7 @@ class SafetyEvaluator:
             self.eval_df, left_index=True, right_index=True, how='left')
         return self.input_df
 
-    def _identify_failed_rows(self, category: str) -> pd.DataFrame:
+    def _identify_failed_rows(self, category: str, truncated_only: bool = False) -> pd.DataFrame:
         """
         Identify rows with None or invalid JSON responses for a given category.
 
@@ -536,6 +563,7 @@ class SafetyEvaluator:
 
         Args:
             category: Category to check ("bioterrorism", "chemical", "cybersecurity")
+            truncated_only: If True, re-evaluate only rows where truncated==True
 
         Returns:
             DataFrame containing only the failed rows that need re-evaluation
@@ -553,14 +581,55 @@ class SafetyEvaluator:
             return batch
 
         raw_df = pd.read_pickle(raw_path)
+        # Ensure raw_response exists for truncation heuristic (create from response if needed)
+        if 'raw_response' not in raw_df.columns and 'response' in raw_df.columns:
+            raw_df = raw_df.copy()
+            raw_df['raw_response'] = raw_df['response'].apply(self._unwrap_response)
         if 'raw_response' not in raw_df.columns:
             logger.info(f"Raw pickle missing raw_response for '{category}', all rows need evaluation")
             return batch
+
+        if truncated_only:
+            if 'truncated' in raw_df.columns:
+                is_failed = (raw_df['truncated'] == True)
+            else:
+                # Legacy pickles: infer truncation from content heuristic
+                # (<analysis> present, no </analysis>, no JSON)
+                def _is_truncated_heuristic(row):
+                    raw = row.get('raw_response') or row.get('response')
+                    s = self._unwrap_response(raw)
+                    if not s:
+                        return False
+                    s = str(s).strip()
+                    has_open = '<analysis>' in s
+                    has_close = '</analysis>' in s
+                    has_brace = '{' in s
+                    return bool(has_open and not has_close and not has_brace)
+                is_failed = raw_df.apply(_is_truncated_heuristic, axis=1)
+                logger.info(
+                    "Raw pickle missing 'truncated' column for '%s'; using heuristic, found %d truncated rows",
+                    category, is_failed.sum(),
+                )
+            failed_indices = raw_df.loc[is_failed].index.tolist()
+            if not failed_indices:
+                logger.info(f"No truncated rows found for category '{category}'")
+                return pd.DataFrame()
+            logger.info(f"Found {len(failed_indices)} truncated rows for category '{category}'")
+            failed_batch = batch.loc[batch.index.intersection(failed_indices)]
+            return failed_batch
 
         # Rows with None/NaN raw_response need re-eval; also check error column for API failures
         is_failed = raw_df['raw_response'].isna()
         if 'error' in raw_df.columns:
             is_failed = is_failed | raw_df['error'].notna()
+        # Include truncated rows (re-eval with higher max_tokens)
+        if 'truncated' in raw_df.columns:
+            is_failed = is_failed | (raw_df['truncated'] == True)
+        # Parse-failed heuristic: raw_response exists but structured fields missing (backward compat)
+        elif 'complied' in raw_df.columns:
+            is_failed = is_failed | (raw_df['raw_response'].notna() & raw_df['complied'].isna())
+        elif 'specificity' in raw_df.columns:
+            is_failed = is_failed | (raw_df['raw_response'].notna() & raw_df['specificity'].isna())
         failed_indices = raw_df.loc[is_failed].index.tolist()
 
         if not failed_indices:
@@ -571,12 +640,13 @@ class SafetyEvaluator:
         failed_batch = batch.loc[batch.index.intersection(failed_indices)]
         return failed_batch
 
-    async def run_reeval(self, backup: bool = True) -> pd.DataFrame:
+    async def run_reeval(self, backup: bool = True, truncated_only: bool = False) -> pd.DataFrame:
         """
         Re-evaluate only rows with None or invalid responses.
 
         Args:
             backup: If True, backup existing results before re-evaluation (default True)
+            truncated_only: If True, re-evaluate only rows where truncated==True
 
         Returns:
             DataFrame with merged evaluation results
@@ -594,7 +664,7 @@ class SafetyEvaluator:
 
         category_keys = ["strongreject"] if self.strongreject_only else list(self.category_labels.keys())
         for category in category_keys:
-            failed_batch = self._identify_failed_rows(category)
+            failed_batch = self._identify_failed_rows(category, truncated_only=truncated_only)
 
             if failed_batch.empty:
                 logger.info(f"Skipping category '{category}' - no failed rows to re-evaluate")
@@ -699,6 +769,8 @@ class SafetyEvaluator:
                 original_raw.at[idx, 'response'] = reeval_df.loc[idx, 'response']
                 original_raw.at[idx, 'error'] = None
                 original_raw.at[idx, 'retries'] = reeval_df.loc[idx, 'retries']
+                if 'finish_reason' in reeval_df.columns:
+                    original_raw.at[idx, 'finish_reason'] = reeval_df.loc[idx, 'finish_reason']
 
             original_raw.to_pickle(raw_path)
             logger.info(f"Updated raw pickle for category '{category}'")
@@ -806,8 +878,8 @@ Example usage:
     parser.add_argument(
         "--max_tokens",
         type=int,
-        default=256,
-        help="Maximum tokens for evaluation response (default: 256)"
+        default=16000,
+        help="Maximum tokens for evaluation response (default: 16000)"
     )
 
     parser.add_argument(
@@ -820,6 +892,12 @@ Example usage:
         "--reeval_only",
         action="store_true",
         help="Re-evaluate only rows with None/invalid responses (requires existing results)"
+    )
+
+    parser.add_argument(
+        "--reeval_truncated_only",
+        action="store_true",
+        help="When used with --reeval_only, re-evaluate only rows where truncated==True"
     )
 
     parser.add_argument(
@@ -914,7 +992,12 @@ Example usage:
     # Run evaluation or re-evaluation
     if args.reeval_only:
         logger.info("Starting re-evaluation of failed rows only")
-        result_df = asyncio.run(safety_judge.run_reeval(backup=True))
+        result_df = asyncio.run(
+            safety_judge.run_reeval(
+                backup=True,
+                truncated_only=args.reeval_truncated_only,
+            )
+        )
     else:
         logger.info(f"Starting safety evaluation with overwrite={args.overwrite}")
         result_df = asyncio.run(safety_judge.run(overwrite=args.overwrite))
