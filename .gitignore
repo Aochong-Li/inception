@@ -40,15 +40,9 @@ uv.lock
 # Jupyter Ckpts
 .ipynb_checkpoints/
 
-# Dev data
-max_iterations_5
-max_iterations_1
-eval_three_models_results
-
 # Evaluation results
-evaluation/evaluation-results/
-inception-results/
-notebook/
+evaluation/archived_results/
+evaluations/inception_data/
 
 # Benchmark data and results
 benchmark/data/
