@@ -44,7 +44,14 @@ TARGET_MODEL_THINK_TEMPLATE = {
     "Qwen/Qwen3-235B-A22B-Thinking-2507": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n<think>\n{reasoning}''',
     "Qwen/Qwen3-Next-80B-A3B-Thinking": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n<think>\n{reasoning}''',
     "moonshotai/Kimi-K2-Thinking": "<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|><|im_user|>user<|im_middle|>{inquiry}<|im_end|><|im_assistant|>assistant<|im_middle|><think> {reasoning}",
-    "zai-org/GLM-4.6": "[gMASK]<sop><|user|>\n{inquiry}\n<think>{reasoning}"
+    "zai-org/GLM-4.6": "[gMASK]<sop><|user|>\n{inquiry}\n<think>{reasoning}",
+    "openai/gpt-oss-120b": '''<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.
+Knowledge cutoff: 2024-06
+Current date: 2025-08-08
+
+Reasoning: high
+
+# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>user<|message|>{inquiry}<|end|><|start|>assistant<|channel|>analysis<|message|>{reasoning}'''
 }
 
 TARGET_MODEL_INSTRUCT_TEMPLATE = {
@@ -183,7 +190,7 @@ class InceptionEngine:
         max_tokens = self.architect_initial_max_tokens if iteration_idx == 0 else self.architect_reiterate_max_tokens
         sampling_overrides = len(self.df) * [{'max_tokens': max_tokens}]
         
-        response = self.architect_engine.generate(prompts=self.df['prompt'], sampling_overrides=sampling_overrides)
+        response = self.architect_engine.generate(prompts=self.df['prompt'], new_sampling_params=sampling_overrides)
         response['response'] = response['response'].apply(lambda x: x.split("</think>")[1].rstrip() if "</think>" in x else x)
 
         assert len(response) == len(self.df), "response and dataframe must have the same length"
