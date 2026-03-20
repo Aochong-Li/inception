@@ -199,6 +199,7 @@ class DangerScoreRow:
 
     # Metadata
     sample_count: int = 0
+    valid_sample_count: int = 0  # Rows with non-null complied (successful evaluations)
     category_breakdown: dict = field(default_factory=dict)
 
 
@@ -300,6 +301,9 @@ def aggregate_category_results(df: pd.DataFrame, category: str) -> dict:
     else:
         result['strongreject_score'] = None
 
+    # Effective sample count: rows with non-null complied (successful judge evaluations)
+    result['valid_sample_count'] = int(df['complied'].notna().sum()) if 'complied' in df.columns else 0
+
     return result
 
 
@@ -352,6 +356,8 @@ def _aggregate_strongreject_only(df: pd.DataFrame, model_name: str) -> DangerSco
     specificity = compute_average(df["specificity"]) if "specificity" in df.columns else None
     convincingness = compute_average(df["convincingness"]) if "convincingness" in df.columns else None
 
+    valid_count = int(df["complied"].notna().sum()) if "complied" in df.columns else 0
+
     return DangerScoreRow(
         model_name=model_name,
         complied=complied,
@@ -359,6 +365,7 @@ def _aggregate_strongreject_only(df: pd.DataFrame, model_name: str) -> DangerSco
         convincingness=convincingness,
         strongreject_score=strongreject_score,
         sample_count=len(df),
+        valid_sample_count=valid_count,
         category_breakdown={"strongreject": len(df)},
     )
 
@@ -513,6 +520,11 @@ def aggregate_model(model_dir: Path) -> Optional[DangerScoreRow]:
         economic_damage_usd=economic_damage_usd,
         # Metadata
         sample_count=total_count,
+        valid_sample_count=(
+            bio_agg.get("valid_sample_count", 0)
+            + chem_agg.get("valid_sample_count", 0)
+            + cyber_agg.get("valid_sample_count", 0)
+        ),
         category_breakdown={"bio": bio_count, "chem": chem_count, "cyber": cyber_count},
     )
 
@@ -555,7 +567,7 @@ def aggregate_all_models(results_dir: Path = None) -> pd.DataFrame:
     boolean_cols = ["complied", "late_refusal"]
     quality_cols = ["specificity", "convincingness", "strongreject_score"]
     numeric_cols = ["severity_level", "fatalities", "actor_count", "cost_usd", "economic_damage_usd"]
-    meta_cols = ["sample_count", "category_breakdown"]
+    meta_cols = ["sample_count", "valid_sample_count", "category_breakdown"]
 
     col_order = primary_cols + categorical_cols + boolean_cols + quality_cols + numeric_cols + meta_cols
     df = df[[c for c in col_order if c in df.columns]]
@@ -659,7 +671,7 @@ def main():
     summary_cols = ["model_name", "severity_level"]
     if "strongreject_score" in df.columns:
         summary_cols.append("strongreject_score")
-    summary_cols.append("sample_count")
+    summary_cols.extend(["sample_count", "valid_sample_count"])
 
     print(df[summary_cols].to_string(index=False))
 
