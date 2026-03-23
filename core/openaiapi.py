@@ -43,6 +43,7 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
     "togetherai": {"env": "TOGETHERAI_API_KEY", "base_url": "https://api.together.xyz/v1"},
     "openrouter": {"env": "OPENROUTER_API_KEY", "base_url": "https://openrouter.ai/api/v1"},
     "deepinfra":  {"env": "DEEPINFRA_API_KEY",  "base_url": "https://api.deepinfra.com/v1/openai"},
+    "vllm_local": {"env": "VLLM_API_KEY",       "base_url": os.environ.get("VLLM_BASE_URL", "http://localhost:8000/v1")},
 }
 
 RETRYABLE = (RateLimitError, APIError, APIConnectionError, APITimeoutError)
