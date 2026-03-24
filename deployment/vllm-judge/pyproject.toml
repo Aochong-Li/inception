@@ -1,0 +1,38 @@
+[project]
+name = "vllm-judge-serve"
+version = "0.1.0"
+description = "Isolated OpenAI-compatible vLLM server env for Qwen judge (bare-metal fallback to Apptainer image)."
+requires-python = "==3.12.*"
+# Provenance: torch stack pins mirror vLLM `requirements/cuda.txt` @ 83c9d525b623 (refresh lock with newer SHAs as needed).
+# PyTorch wheels: stable `download.pytorch.org/whl/cu130` (Docker cu130-nightly uses this index, not pytorch nightly).
+# vLLM Docker installs from a wheel built in-image; here we use wheels.vllm.ai nightly as the closest pip analogue.
+dependencies = [
+    "vllm",
+    "numba==0.61.2",
+    "torch==2.10.0",
+    "torchaudio==2.10.0",
+    "torchvision==0.25.0",
+    "flashinfer-python==0.6.6",
+    "nvidia-cudnn-frontend>=1.13.0,<1.19.0",
+    "nvidia-cutlass-dsl>=4.4.0.dev1",
+    "quack-kernels>=0.2.7",
+]
+
+[tool.uv]
+# PyTorch cu130 index publishes some shared packages (e.g. packaging) at older versions;
+# flashinfer needs newer packaging — allow best match across PyPI + extra indexes.
+index-strategy = "unsafe-best-match"
+# Match vLLM Docker Dockerfile stable path for CUDA 13.0.x → cu130 segment.
+extra-index-url = [
+    "https://download.pytorch.org/whl/cu130",
+    "https://wheels.vllm.ai/nightly",
+]
+
+[tool.uv.sources]
+# Prefer nightly wheels for vLLM itself (image builds vLLM from source at tip commit).
+vllm = { index = "vllm-nightly" }
+
+[[tool.uv.index]]
+name = "vllm-nightly"
+url = "https://wheels.vllm.ai/nightly"
+explicit = true

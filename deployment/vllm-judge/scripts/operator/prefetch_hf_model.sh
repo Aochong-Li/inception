@@ -29,7 +29,7 @@ MODEL="${MODEL:-Qwen/Qwen3.5-122B-A10B-FP8}"
 HF_TOKEN="${HF_TOKEN:-}"
 
 # POLICY: hardwired weights path (non-negotiable)
-export HF_HOME="/share/goyal/md2292/huggingface"
+export HF_HOME="${HF_HOME:-/share/goyal/md2292/huggingface}"
 
 echo "=== Model Weight Prefetch ==="
 echo "  Model:   ${MODEL}"

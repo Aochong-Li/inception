@@ -2,7 +2,7 @@
 # Convenience targets for the Apptainer-based judge service.
 # NOTE: GPU targets (serve) must run on the GPU node.
 
-.PHONY: check-apptainer install prefetch serve smoke health help
+.PHONY: check-apptainer install prefetch sync-bare-venv serve smoke health help
 
 # ── Prerequisites (no GPU) ──────────────────────────────────
 
@@ -14,6 +14,9 @@ install:           ## Pull vLLM OCI image via Apptainer (no GPU for pull)
 
 prefetch:          ## Download model weights to /share/goyal/md2292/huggingface (no GPU)
 	bash scripts/operator/prefetch_hf_model.sh
+
+sync-bare-venv:    ## Bare-metal vLLM env from pyproject.toml + uv.lock (no Apptainer)
+	uv sync --frozen --python 3.12
 
 # ── Serving (GPU node only) ─────────────────────────────────
 

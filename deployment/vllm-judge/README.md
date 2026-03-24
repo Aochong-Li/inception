@@ -2,9 +2,11 @@
 
 Serves **Qwen/Qwen3.5-122B-A10B-FP8** as an OpenAI-compatible judge model on NVIDIA Blackwell (B200) GPUs via **Apptainer**.
 
-**Runtime:** Apptainer only (`docker://vllm/vllm-openai:cu130-nightly` pulled as SIF). **No Docker, no Docker Compose, no Podman, no bare `uv pip install vllm`** for serving.
+**Runtime (preferred):** Apptainer (`docker://vllm/vllm-openai:cu130-nightly` pulled as SIF). **No Docker, no Docker Compose, no Podman.**
 
-**`uv`:** Host-side only -- prefetch weights, smoke tests, eval client. The vLLM container image ships its own PyTorch + CUDA stack.
+**Bare-metal fallback:** `pyproject.toml` + `uv.lock` pin torch/vLLM/FlashInfer to match upstream `requirements/cuda.txt` and the **cu130** PyTorch index used by CUDA 13.0 release images (vLLM wheel from `wheels.vllm.ai/nightly`). Install with `make sync-bare-venv` or `uv sync --frozen --python 3.12` — do **not** use an unpinned `uv pip install vllm`.
+
+**`uv`:** Prefetch, locked bare-metal venv, smoke tests, eval client. The Apptainer image ships its own PyTorch + CUDA stack; the lockfile is the pip analogue.
 
 **Weights:** All model weights **must** reside at **`/share/goyal/md2292/huggingface`** (site policy, non-negotiable).
 
@@ -38,7 +40,7 @@ cd deployment/vllm-judge
 bash scripts/operator/check_apptainer_prerequisite.sh
 ```
 
-If this fails, **stop**. Do not substitute Docker. See [Failure Report](#failure-report).
+If this fails, do not substitute Docker. Prefer fixing Apptainer (module load, policy). If your site cannot provide Apptainer, use the **bare-metal** path in `evaluation/QWEN_JUDGE_RUNBOOK.md` (Step 1.4b) and [Failure Report](#failure-report).
 
 Optional: save a failure report:
 
