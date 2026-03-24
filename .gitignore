@@ -58,3 +58,19 @@ evaluation/inception_data/
 evaluation/model_responses.zip
 
 fasttext_models/
+
+# IDE config
+.cursor/
+
+# SLURM / runtime logs
+logs/
+
+# Generated batch I/O and eval result data (large, reproducible)
+evaluation/batch_io/
+evaluation/eval_deepseek_judge/
+
+# Local Apptainer prerequisite failure dumps (see deployment/vllm-judge/README.md)
+deployment/vllm-judge/APPTAINER_PREREQ_FAILURE_REPORT.txt
+
+# Allow vllm-judge lockfile (overrides root uv.lock ignore)
+!deployment/vllm-judge/uv.lock
