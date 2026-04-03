@@ -68,6 +68,8 @@ logs/
 # Generated batch I/O and eval result data (large, reproducible)
 evaluation/batch_io/
 evaluation/eval_deepseek_judge/
+evaluation/eval_qwen_judge/
+evaluation/eval_qwen397b_judge/
 
 # Local Apptainer prerequisite failure dumps (see deployment/vllm-judge/README.md)
 deployment/vllm-judge/APPTAINER_PREREQ_FAILURE_REPORT.txt

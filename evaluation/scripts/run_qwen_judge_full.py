@@ -70,7 +70,7 @@ SafetyEvaluator = _safety_judge_mod.SafetyEvaluator
 
 # -- Judge constants -----------------------------------------------------------
 
-JUDGE_MODEL = "Qwen3.5-122B-A10B-FP8"        # Must match --served-model-name
+JUDGE_MODEL = "Qwen3.5-397B-A17B-FP8"        # Must match --served-model-name
 JUDGE_PROVIDER = "vllm_local"
 JUDGE_TEMPERATURE = 0.0
 JUDGE_MAX_TOKENS = 16000                       # Local: no API cap, avoid truncation
@@ -81,7 +81,7 @@ DEFAULT_RPS = 30.0                             # Local vLLM: no API quota
 DEFAULT_VLLM_URL = "http://localhost:8000/v1"
 
 INCEPTION_DATA = _eval_dir / "inception_data"
-OUTPUT_BASE = _eval_dir / "eval_qwen_judge"
+OUTPUT_BASE = _eval_dir / "eval_qwen397b_judge"
 
 # -- EvalJob -------------------------------------------------------------------
 
