@@ -44,6 +44,7 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
     "togetherai": {"env": "TOGETHERAI_API_KEY", "base_url": "https://api.together.xyz/v1"},
     "openrouter": {"env": "OPENROUTER_API_KEY", "base_url": "https://openrouter.ai/api/v1"},
     "deepinfra":  {"env": "DEEPINFRA_API_KEY",  "base_url": "https://api.deepinfra.com/v1/openai"},
+    "vllm_local": {"env": "VLLM_API_KEY",       "base_url": os.environ.get("VLLM_BASE_URL", "http://localhost:8000/v1")},
 }
 
 RETRYABLE = (RateLimitError, APIError, APIConnectionError, Timeout)
@@ -113,11 +114,14 @@ def generate_chat_completions(
                     stop=stop,
                 )
             resp = client.chat.completions.create(**kwargs)
-            if model == "deepseek-reasoner":
-                return [
-                    f"{c.message.reasoning_content}\n</think>\n{c.message.content}" for c in resp.choices
-                ], errors, attempt
-            return [c.message.content for c in resp.choices], errors, attempt
+            results = []
+            for c in resp.choices:
+                reasoning = getattr(c.message, 'reasoning_content', None)
+                if reasoning:
+                    results.append(f"<think>\n{reasoning}\n</think>\n{c.message.content}")
+                else:
+                    results.append(c.message.content)
+            return results, errors, attempt
         except Exception as exc:
             # Store error as string
             error_msg = f"{type(exc).__name__}: {str(exc)}"

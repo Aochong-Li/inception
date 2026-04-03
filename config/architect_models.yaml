@@ -1,3 +1,4 @@
-models:
+think_models:
   - model_name:  "open-thoughts/OpenThinker3-7B"
     nick_name: "OpenThinker3-7B-Qwen"
+    client_name: ""

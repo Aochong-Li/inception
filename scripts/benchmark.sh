@@ -1,42 +1,56 @@
 #!/bin/bash
 set -ex
-export CUDA_VISIBLE_DEVICES=0,1
 
-# -------- static bits you rarely touch --------
-MODELS_YAML="config/architect_models.yaml"
-DATASET_NAME="wmdp_shot_examples"
+# Benchmark: direct query evaluation (no jailbreak).
+# Sends the same 800 inquiries used in inception directly to each target model.
+# Supports both local vLLM (client_name="") and API (client_name="deepinfra", etc.)
+#
+# Usage:
+#   bash scripts/benchmark.sh                      # run all models from YAML
+#   bash scripts/benchmark.sh --overwrite True      # re-run even if results exist
+
+# -------- config --------
+MODELS_YAML="config/target_models.yaml"
+DATASET_PATH="aochongoliverli/wmdp_biochem_inquiries_800"
 SPLIT="test"
-SAMPLE_K=5
-DATASET_PATH='aochongoliverli/wmdp_shot_examples_256'
-OUTPUT_DIR="./results/${DATASET_NAME}"
-# ----------------------------------------------
+OUTPUT_BASE="./results/benchmark"
+OVERWRITE="${1:-False}"
+DEFAULT_MAX_TOKENS=32768
+# -------------------------
 
-# Use Python to extract model information from YAML
+# Extract model info with group (think/instruct) for subdirectory separation
+# Includes optional max_tokens from YAML config
 MODELS_INFO=$(python -c "
 import yaml
 with open('$MODELS_YAML', 'r') as f:
     data = yaml.safe_load(f)
-for model in data['models']:
-    print(f\"{model['model_name']},{model['nick_name']}\")
+for group, subdir in [('think_models', 'think'), ('instruct_models', 'instruct')]:
+    for model in data.get(group, []):
+        client = model.get('client_name', '')
+        max_tokens = model.get('max_tokens', '$DEFAULT_MAX_TOKENS')
+        print(f\"{model['model_name']},{model['nick_name']},{client},{subdir},{max_tokens}\")
 ")
 
-# Loop through each model
-echo "$MODELS_INFO" | while IFS=, read -r model_name nick_name; do
-    echo "Running model: $nick_name (model_name: $model_name)"
+echo "$MODELS_INFO" | while IFS=, read -r model_name nick_name client_name subdir max_tokens; do
+    OUTPUT_DIR="${OUTPUT_BASE}/${subdir}"
+    mkdir -p "$OUTPUT_DIR"
+
+    echo "========================================"
+    echo "Benchmark: $nick_name ($subdir) via ${client_name:-local} [max_tokens=$max_tokens]"
+    echo "========================================"
 
     python src/benchmark.py \
-    --model_name "$model_name" \
-    --nick_name "$nick_name" \
-    --tokenizer_name "$model_name" \
-    --dataset_name_or_path $DATASET_PATH \
-    --split_name $SPLIT \
-    --output_dir $OUTPUT_DIR \
-    --tensor_parallel_size 1 \
-    --gpu_memory_utilization 0.9 \
-    --dtype bfloat16 \
-    --max_tokens 32768 \
-    --temperature 0.6 \
-    --top_p 0.95 \
-    --top_k -1 \
-    --overwrite True
-done 
+        --model_name "$model_name" \
+        --nick_name "$nick_name" \
+        --tokenizer_name "$model_name" \
+        --dataset_name_or_path "$DATASET_PATH" \
+        --split_name "$SPLIT" \
+        --output_dir "$OUTPUT_DIR" \
+        --client_name "$client_name" \
+        --max_tokens "$max_tokens" \
+        --temperature 0.6 \
+        --top_p 0.95 \
+        --top_k -1 \
+        --sample_k 1 \
+        --overwrite "$OVERWRITE"
+done

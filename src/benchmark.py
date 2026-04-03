@@ -14,7 +14,7 @@ def str2bool(v):
     if isinstance(v, bool):
         return v
     if v.lower() == "true":
-        return True 
+        return True
     elif v.lower() == "false":
         return False
 
@@ -23,27 +23,27 @@ class BenchmarkEval(OpenLMEngine):
                  model_name: str,
                  nick_name: str,
                  tokenizer_name: str,
-                 dataset_name_or_path: str = 'aochongoliverli/wmdp_inquiries_300',
+                 dataset_name_or_path: str = 'aochongoliverli/wmdp_biochem_inquiries_800',
                  subset_name: str = None,
-                 split_name: str = 'train',
+                 split_name: str = 'test',
                  sample_size: int = None,
-                 output_dir: str = './results/wmdp_inquiries/benchmark',
+                 output_dir: str = './results/benchmark',
                  tensor_parallel_size: int = 1,
                  gpu_memory_utilization: float = 0.85,
                  dtype: str = "bfloat16",
-                 system_prompt: str = None, 
-                 max_tokens: int = 16384,
-                 temperature: float = 0.7,
-                 top_p: float = 1.0,
-                 top_k: int = 0,
+                 system_prompt: str = None,
+                 max_tokens: int = 32768,
+                 temperature: float = 0.6,
+                 top_p: float = 0.95,
+                 top_k: int = -1,
                  sample_k: int = 1,
                  max_num_batched_tokens: int = 8192,
                  overwrite: bool = False,
                  client_name: str = '',
-                 filename_suffix: str = ''
+                 filename_suffix: str = '',
+                 requests_per_second: float = 0.0,
                  ):
 
-        # Initialize attributes first
         self.model_name = model_name
         self.nick_name = nick_name
         self.output_dir = output_dir
@@ -60,6 +60,7 @@ class BenchmarkEval(OpenLMEngine):
         self.client_name = client_name
         self.filename_suffix = filename_suffix
         self.system_prompt = system_prompt
+        self.requests_per_second = requests_per_second
 
         os.makedirs(self.output_dir, exist_ok=True)
         self.output_filepath = os.path.join(
@@ -79,8 +80,7 @@ class BenchmarkEval(OpenLMEngine):
         )
 
         if self.client_name == '':
-            # Run locally
-            # Initialize model config
+            # Local inference via vLLM
             config = ModelConfig(
                 model_name=model_name,
                 tokenizer_name=tokenizer_name,
@@ -94,9 +94,7 @@ class BenchmarkEval(OpenLMEngine):
                 n = self.sample_k,
                 max_num_batched_tokens=self.max_num_batched_tokens
             )
-            # Download model weights if not already downloaded
             _ = AutoModelForCausalLM.from_pretrained(self.model_name, trust_remote_code=True)
-            # Initialize parent class
             super().__init__(config=config)
             self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
@@ -143,30 +141,27 @@ class BenchmarkEval(OpenLMEngine):
         self.df.to_pickle(self.output_filepath)
 
         # Post-process
-        self.df['thinking'] = self.df['response'].apply(lambda x: x.split('</think>')[0].strip() if '</think>' in x else x)
+        self.df['thinking'] = self.df['response'].apply(lambda x: x.split('</think>')[0].strip() if x and '</think>' in x else x)
         self.df.to_pickle(self.output_filepath)
         
     def api_eval(self) -> None:
         os.makedirs(self.output_dir + "/api", exist_ok=True)
-        if self.system_prompt:
-            self.df["prompt"] = self.df["inquiry"].apply(lambda x: x + " " + self.system_prompt)
-        else:
-            self.df["prompt"] = self.df["inquiry"]
+        self.df["prompt"] = self.df["inquiry"]
 
         engine = OpenAI_Engine(
             input_df=self.df,
             prompt_template="{prompt}",
-            developer_message="",
+            developer_message=self.system_prompt or "",
             template_map={"prompt": "prompt"},
             nick_name=f"benchmark_eval_{self.nick_name}",
-            batch_io_root=str(Path.home()) + "/research/openai_batch_io/wmdp",
+            batch_io_root=str(Path.home()) + "/inception-eval/benchmark/batch_io",
             cache_filepath=self.output_dir + f"/api/{self.nick_name}_api_responses.pickle",
             model=self.model_name,
             client_name=self.client_name,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
             n=self.sample_k,
-            mode="chat_completions"
+            mode="chat_completions",
         )
         engine.run_model(overwrite=self.overwrite)
         self.response = engine.retrieve_outputs(overwrite=self.overwrite)
@@ -177,48 +172,39 @@ class BenchmarkEval(OpenLMEngine):
         self.response = self.generate(prompts=prompts)
 
 if __name__=="__main__":
-    parser = argparse.ArgumentParser(description="Parse Arguments for Reasoner QA evaluation")
+    parser = argparse.ArgumentParser(description="Benchmark: direct query evaluation (no jailbreak)")
 
-    parser.add_argument("--model_name", type=str, required=True, help="Name of the model to use")
-    parser.add_argument("--nick_name", type=str, required=True, help="Nickname for the model")
-    parser.add_argument("--tokenizer_name", type=str, required=True, help="Name of the tokenizer to use")
-    parser.add_argument("--dataset_name_or_path", type=str, required=True, help="Name of the dataset to evaluate on")
-    parser.add_argument("--subset_name", type=str, default=None, help="Name of the dataset subset (default: None)")
-    parser.add_argument("--split_name", type=str, default='test', help="Dataset split to use (default: test)")
-    parser.add_argument("--sample_size", type=int, default=None, help="Number of samples to use (default: None)")
-    parser.add_argument("--output_dir", type=str, default='/share/goyal/lio/reasoning/eval/', 
-                       help="Directory to save evaluation results")
+    parser.add_argument("--model_name", type=str, required=True)
+    parser.add_argument("--nick_name", type=str, required=True)
+    parser.add_argument("--tokenizer_name", type=str, required=True)
+    parser.add_argument("--dataset_name_or_path", type=str, default="aochongoliverli/wmdp_biochem_inquiries_800")
+    parser.add_argument("--subset_name", type=str, default=None)
+    parser.add_argument("--split_name", type=str, default='test')
+    parser.add_argument("--sample_size", type=int, default=None)
+    parser.add_argument("--output_dir", type=str, default='./results/benchmark')
     parser.add_argument("--filename_suffix", type=str, default="")
 
-    parser.add_argument("--tensor_parallel_size", type=int, default=2,
-                        help="Number of GPUs for tensor parallelism")
-    parser.add_argument("--gpu_memory_utilization", type=float, default=0.75,
-                        help="Fraction of GPU memory to allocate")
-    parser.add_argument("--dtype", type=str, default="bfloat16",
-                        help="Data type for model weights (e.g., bfloat16, float16)")
-    parser.add_argument("--max_tokens", type=int, default=8192,
-                        help="Maximum number of output tokens")
-    parser.add_argument("--temperature", type=float, default=0.6,
-                        help="Sampling temperature")
-    parser.add_argument("--top_p", type=float, default=1.0,
-                        help="Nucleus sampling parameter")
-    parser.add_argument("--top_k", type=int, default=0,
-                        help="Top-k sampling parameter")
-    parser.add_argument("--sample_k", type=int, default=1,
-                        help="Sample@k parameter")
+    # Local inference settings
+    parser.add_argument("--tensor_parallel_size", type=int, default=2)
+    parser.add_argument("--gpu_memory_utilization", type=float, default=0.85)
+    parser.add_argument("--dtype", type=str, default="bfloat16")
+    parser.add_argument("--max_num_batched_tokens", type=int, default=8192)
 
-    parser.add_argument("--overwrite", type=str2bool, default=False,
-                        help="Overwrite existing results")
-    parser.add_argument("--max_num_batched_tokens", type=int, default=8192,
-                        help="Maximum number of tokens to batch")
+    # Generation settings
+    parser.add_argument("--max_tokens", type=int, default=32768)
+    parser.add_argument("--temperature", type=float, default=0.6)
+    parser.add_argument("--top_p", type=float, default=0.95)
+    parser.add_argument("--top_k", type=int, default=-1)
+    parser.add_argument("--sample_k", type=int, default=1)
+
+    # API settings
     parser.add_argument("--client_name", type=str, default='',
-                        help="Name of the client to use")
+                        help="API provider (empty=local vLLM, deepinfra, togetherai, etc.)")
+    parser.add_argument("--requests_per_second", type=float, default=0.0,
+                        help="Rate limit for API calls (0=no limit)")
+
+    parser.add_argument("--overwrite", type=str2bool, default=False)
     args = parser.parse_args()
 
-    SYSTEM_PROMPT = None
-    engine = BenchmarkEval(
-        **vars(args),
-        system_prompt=SYSTEM_PROMPT
-    )
-    import pdb; pdb.set_trace()
+    engine = BenchmarkEval(**vars(args))
     engine.eval()
