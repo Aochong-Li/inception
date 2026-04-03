@@ -54,6 +54,7 @@ think-vs-instruct-benchmark/
 evaluation-results/
 
 # Large evaluation data assets (do not commit)
+evaluation/inception_data
 evaluation/inception_data/
 evaluation/model_responses.zip
 
