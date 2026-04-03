@@ -37,3 +37,15 @@ fasttext_models/*.bin
 
 # venv
 .venv
+
+# Claude Code
+.claude/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# SLURM output
+slurm-*.out
+
+# Evaluation results (large, generated)
+evaluation/
