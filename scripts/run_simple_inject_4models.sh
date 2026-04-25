@@ -5,6 +5,8 @@
 # Overrides (mode / client / extra_body) applied via TARGET_MODEL_OVERRIDES in main.py.
 set -e
 
+export PATH="$(pwd)/.venv/bin:$PATH"
+export PYTHONPATH="$(pwd):${PYTHONPATH:-}"
 export HF_HOME="${HF_HOME_OVERRIDE:-$HOME/.cache/huggingface}"
 unset HF_DATASETS_CACHE
 

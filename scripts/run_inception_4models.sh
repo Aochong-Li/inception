@@ -8,6 +8,8 @@
 #   ablation_768 × 4  → ablation_1024 × 4 → max_iter=5 × 4
 set -e
 
+export PATH="$(pwd)/.venv/bin:$PATH"
+export PYTHONPATH="$(pwd):${PYTHONPATH:-}"
 export HF_HOME="${HF_HOME_OVERRIDE:-$HOME/.cache/huggingface}"
 unset HF_DATASETS_CACHE
 

@@ -5,6 +5,8 @@
 # Stagger launches by 5s to spread initial provider load.
 set -e
 
+export PATH="$(pwd)/.venv/bin:$PATH"
+export PYTHONPATH="$(pwd):${PYTHONPATH:-}"
 export HF_HOME="${HF_HOME_OVERRIDE:-$HOME/.cache/huggingface}"
 unset HF_DATASETS_CACHE
 
