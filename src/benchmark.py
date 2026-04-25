@@ -236,6 +236,20 @@ if __name__=="__main__":
     args_dict.pop("extra_body_json", None)
     args_dict["extra_body"] = extra_body
 
+    # Apply per-model API overrides (api_model_name, client, extra_body, reasoning_effort)
+    from src.main import TARGET_MODEL_OVERRIDES
+    _overrides = TARGET_MODEL_OVERRIDES.get(args_dict['model_name'], {})
+    if _overrides:
+        if 'api_model_name' in _overrides:
+            args_dict['model_name'] = _overrides['api_model_name']
+        if 'client_name' in _overrides:
+            args_dict['client_name'] = _overrides['client_name']
+        if extra_body is None and 'extra_body' in _overrides:
+            extra_body = _overrides['extra_body']
+        if args_dict.get('reasoning_effort') is None and 'reasoning_effort' in _overrides:
+            args_dict['reasoning_effort'] = _overrides['reasoning_effort']
+    args_dict['extra_body'] = extra_body
+
     SYSTEM_PROMPT = None
     engine = BenchmarkEval(
         **args_dict,
