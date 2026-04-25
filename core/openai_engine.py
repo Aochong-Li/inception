@@ -40,7 +40,6 @@ class OpenAI_Engine():
         max_validation_retries: int = 3,
         max_consecutive_refusals: int = 0,
         extra_body: Optional[Dict[str, Any]] = None,
-        reasoning_effort: Optional[str] = None,
     ):
         self.input_df = input_df
         self.prompt_template = prompt_template
@@ -70,7 +69,6 @@ class OpenAI_Engine():
         # JSONL body so the /v1/completions and /v1/chat/completions workers
         # send them on every call.
         self.extra_body = extra_body
-        self.reasoning_effort = reasoning_effort
 
     def prepare_chat_completions_input(self):
         """Prepare batch input file with prompts formatted from the input dataframe."""
@@ -98,7 +96,6 @@ class OpenAI_Engine():
                 n=self.n,
                 top_p=self.top_p,
                 extra_body=self.extra_body,
-                reasoning_effort=self.reasoning_effort,
             )
 
             openaiapi.cache_batch_query(self.input_filepath, query)
@@ -133,7 +130,6 @@ class OpenAI_Engine():
                 n=self.n,
                 top_p=self.top_p,
                 extra_body=self.extra_body,
-                reasoning_effort=self.reasoning_effort,
             )
             openaiapi.cache_batch_query(self.input_filepath, query)
 
@@ -159,7 +155,6 @@ class OpenAI_Engine():
                 n=self.n,
                 top_p=self.top_p,
                 extra_body=self.extra_body,
-                reasoning_effort=self.reasoning_effort,
             )
 
             openaiapi.cache_batch_query(self.input_filepath, query)

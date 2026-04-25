@@ -1,8 +1,7 @@
 #!/bin/bash
-# Pool A — Benchmark baseline for 4 new think-mode models.
-# 10 trials × 4 models = 40 trials, fully parallel (no GPU, API-only).
-# Output: results/benchmark/think/trial_{0..9}/{nick}.pickle
-# Stagger launches by 5s to spread initial provider load.
+# Benchmark baseline for 4 new think-mode models, single trial each.
+# API-only (no GPU); runs the 4 models in parallel.
+# Per-model max_tokens is sourced from config/target_models.yaml.
 set -e
 
 export PATH="$(pwd)/.venv/bin:$PATH"
@@ -12,40 +11,55 @@ unset HF_DATASETS_CACHE
 
 DATASET_NAME="aochongoliverli/wmdp_biochem_inquiries_800"
 RESULTS_DIR="./results"
-N_TRIALS=10
+MODELS_YAML="config/target_models.yaml"
+DEFAULT_MAX_TOKENS=32768
 
 MODELS=(
-    "deepseek-ai/DeepSeek-V4-Pro|DeepSeek-V4-Pro|deepseek"
+    "deepseek-ai/DeepSeek-V4-Pro|DeepSeek-V4-Pro|deepseek_beta"
     "deepseek-ai/DeepSeek-V4-Flash|DeepSeek-V4-Flash|deepseek_beta"
     "moonshotai/Kimi-K2.6|Kimi-K2.6|deepinfra"
     "zai-org/GLM-5.1|GLM-5.1|deepinfra"
 )
 
+get_max_tokens() {
+    local nick="$1"
+    python -c "
+import yaml
+with open('${MODELS_YAML}') as f:
+    data = yaml.safe_load(f)
+for m in data.get('think_models', []) + data.get('instruct_models', []):
+    if m.get('nick_name') == '${nick}':
+        print(m.get('max_tokens', ${DEFAULT_MAX_TOKENS}))
+        break
+else:
+    print(${DEFAULT_MAX_TOKENS})
+"
+}
+
 run_model() {
     local model_name="$1" nick="$2" client="$3"
-    echo "[$(date +%H:%M:%S)] benchmark START $nick"
-    for trial in $(seq 0 $((N_TRIALS - 1))); do
-        python src/benchmark.py \
-            --model_name "${model_name}" \
-            --nick_name "${nick}" \
-            --tokenizer_name "${model_name}" \
-            --dataset_name_or_path "${DATASET_NAME}" \
-            --split_name "test" \
-            --output_dir "${RESULTS_DIR}/benchmark/think" \
-            --max_tokens 32768 \
-            --temperature 0.6 \
-            --top_p 0.95 \
-            --top_k -1 \
-            --sample_k 1 \
-            --client_name "${client}" \
-            --trial_idx "${trial}" \
-            --overwrite False
-    done
+    local max_tokens
+    max_tokens=$(get_max_tokens "$nick")
+    echo "[$(date +%H:%M:%S)] benchmark START $nick (max_tokens=${max_tokens})"
+    python src/benchmark.py \
+        --model_name "${model_name}" \
+        --nick_name "${nick}" \
+        --tokenizer_name "${model_name}" \
+        --dataset_name_or_path "${DATASET_NAME}" \
+        --split_name "test" \
+        --output_dir "${RESULTS_DIR}/benchmark/think" \
+        --max_tokens "${max_tokens}" \
+        --temperature 0.6 \
+        --top_p 0.95 \
+        --top_k -1 \
+        --sample_k 1 \
+        --client_name "${client}" \
+        --overwrite False
     echo "[$(date +%H:%M:%S)] benchmark DONE $nick"
 }
 
-export -f run_model
-export RESULTS_DIR DATASET_NAME N_TRIALS
+export -f get_max_tokens run_model
+export MODELS_YAML DEFAULT_MAX_TOKENS RESULTS_DIR DATASET_NAME
 
 PIDS=()
 for entry in "${MODELS[@]}"; do
@@ -55,7 +69,6 @@ for entry in "${MODELS[@]}"; do
     sleep 5
 done
 
-# Wait for all and report
 FAILED=0
 for i in "${!PIDS[@]}"; do
     if ! wait "${PIDS[$i]}"; then

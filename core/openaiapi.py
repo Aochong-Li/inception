@@ -354,7 +354,6 @@ def generate_chat_completions(
     max_attempts: int = 3,
     rate_limiter: Optional["TokenBucketRateLimiter"] = None,
     extra_body: Optional[Dict[str, Any]] = None,
-    reasoning_effort: Optional[str] = None,
     messages_override: Optional[List[Dict[str, str]]] = None,
 ) -> Tuple[Optional[List[str]], Optional[str], List[str], int]:
     """Returns (content, finish_reason, errors, attempt). finish_reason is 'length' when truncated.
@@ -362,8 +361,6 @@ def generate_chat_completions(
     ``extra_body`` is forwarded as-is to the OpenAI SDK (e.g. provider-specific
     ``{"thinking": {"type": "enabled"}}`` or
     ``{"chat_template_kwargs": {"enable_thinking": true}}``).
-    ``reasoning_effort`` (e.g. "high") is forwarded as a top-level kwarg when
-    supported by the chat.completions endpoint.
     ``messages_override``: if provided, replaces the default ``[system, user]``
     message list. Used for assistant-prefill continuations where the caller
     needs to pass ``[{user}, {assistant, "<think>..."}]``.
@@ -394,8 +391,6 @@ def generate_chat_completions(
                 )
             if extra_body is not None:
                 kwargs["extra_body"] = extra_body
-            if reasoning_effort is not None:
-                kwargs["reasoning_effort"] = reasoning_effort
             resp = client.chat.completions.create(**kwargs)
             # Restore rate after a successful call
             if rate_limiter is not None:
@@ -478,14 +473,11 @@ def generate_completions(
     max_attempts: int = 3,
     rate_limiter: Optional["TokenBucketRateLimiter"] = None,
     extra_body: Optional[Dict[str, Any]] = None,
-    reasoning_effort: Optional[str] = None,
 ) -> Tuple[Optional[List[str]], Optional[str], List[str], int]:
     """Returns (content, finish_reason, errors, attempt). finish_reason is 'length' when truncated.
 
     ``extra_body`` is forwarded as-is to the OpenAI SDK on the /v1/completions
-    endpoint. ``reasoning_effort`` is NOT a top-level kwarg on
-    ``client.completions.create``; if supplied here, it is folded into
-    ``extra_body`` so the router sees it as a body field.
+    endpoint.
     """
     client = create_client(client_name)
 
@@ -501,13 +493,8 @@ def generate_completions(
                     presence_penalty=presence_penalty,
                     stop=stop,
                 )
-            # Fold reasoning_effort into extra_body because the SDK's
-            # completions.create() does NOT accept it as a top-level kwarg.
-            merged_extra_body = dict(extra_body) if extra_body else {}
-            if reasoning_effort is not None and "reasoning_effort" not in merged_extra_body:
-                merged_extra_body["reasoning_effort"] = reasoning_effort
-            if merged_extra_body:
-                kwargs["extra_body"] = merged_extra_body
+            if extra_body is not None:
+                kwargs["extra_body"] = extra_body
             resp = client.completions.create(**kwargs)
             # Restore rate after a successful call
             if rate_limiter is not None:
@@ -652,7 +639,6 @@ def _process(
                 max_attempts=max_api_attempts,
                 rate_limiter=rate_limiter,
                 extra_body=body.get("extra_body"),
-                reasoning_effort=body.get("reasoning_effort"),
                 messages_override=_override,
             )
         elif func_name == "completions":
@@ -670,7 +656,6 @@ def _process(
                 max_attempts=max_api_attempts,
                 rate_limiter=rate_limiter,
                 extra_body=body.get("extra_body"),
-                reasoning_effort=body.get("reasoning_effort"),
             )
         else:
             raise ValueError(f"Unknown function name: {func_name}")
@@ -987,7 +972,6 @@ def batch_completions_template(
     presence_penalty: float = 0.0,
     stop: Optional[list[str]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
-    reasoning_effort: Optional[str] = None,
 ):
     body: Dict[str, Any] = {
         "model": model,
@@ -1002,8 +986,6 @@ def batch_completions_template(
     }
     if extra_body is not None:
         body["extra_body"] = extra_body
-    if reasoning_effort is not None:
-        body["reasoning_effort"] = reasoning_effort
     query_template = {
         "custom_id": custom_id,
         "client_name": client_name,
@@ -1027,7 +1009,6 @@ def batch_chat_completions_template(
     presence_penalty: float = 0.0,
     stop: Optional[list[str]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
-    reasoning_effort: Optional[str] = None,
 ):
     body: Dict[str, Any] = {
         "model": model,
@@ -1045,8 +1026,6 @@ def batch_chat_completions_template(
     }
     if extra_body is not None:
         body["extra_body"] = extra_body
-    if reasoning_effort is not None:
-        body["reasoning_effort"] = reasoning_effort
     query_template = {
         "custom_id": custom_id,
         "client_name": client_name,
@@ -1070,7 +1049,6 @@ def batch_chat_completions_prefill_template(
     presence_penalty: float = 0.0,
     stop: Optional[list[str]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
-    reasoning_effort: Optional[str] = None,
 ):
     """Assistant-prefill chat body: [{user: inquiry}, {assistant: "<think>" + reasoning}].
 
@@ -1093,8 +1071,6 @@ def batch_chat_completions_prefill_template(
     }
     if extra_body is not None:
         body["extra_body"] = extra_body
-    if reasoning_effort is not None:
-        body["reasoning_effort"] = reasoning_effort
     query_template = {
         "custom_id": custom_id,
         "client_name": client_name,

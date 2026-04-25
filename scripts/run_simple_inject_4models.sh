@@ -1,8 +1,7 @@
 #!/bin/bash
-# Pool A — Simple-inject baseline for 4 new think-mode models.
-# 10 trials × 4 models = 40 trials, fully parallel (no GPU, API-only).
-# Output: results/simple_inject/think/trial_{0..9}/{nick}.pickle
-# Overrides (mode / client / extra_body) applied via TARGET_MODEL_OVERRIDES in main.py.
+# Simple-inject baseline for 4 new think-mode models, single trial each.
+# API-only (no GPU); runs the 4 models in parallel.
+# Per-model max_tokens is sourced from config/target_models.yaml.
 set -e
 
 export PATH="$(pwd)/.venv/bin:$PATH"
@@ -12,7 +11,8 @@ unset HF_DATASETS_CACHE
 
 DATASET_NAME="aochongoliverli/wmdp_biochem_inquiries_800"
 RESULTS_DIR="./results"
-N_TRIALS=10
+MODELS_YAML="config/target_models.yaml"
+DEFAULT_MAX_TOKENS=32768
 
 MODELS=(
     "deepseek-ai/DeepSeek-V4-Pro|DeepSeek-V4-Pro|deepseek_beta"
@@ -21,27 +21,41 @@ MODELS=(
     "zai-org/GLM-5.1|GLM-5.1|deepinfra"
 )
 
+get_max_tokens() {
+    local nick="$1"
+    python -c "
+import yaml
+with open('${MODELS_YAML}') as f:
+    data = yaml.safe_load(f)
+for m in data.get('think_models', []) + data.get('instruct_models', []):
+    if m.get('nick_name') == '${nick}':
+        print(m.get('max_tokens', ${DEFAULT_MAX_TOKENS}))
+        break
+else:
+    print(${DEFAULT_MAX_TOKENS})
+"
+}
+
 run_model() {
     local model_name="$1" nick="$2" client="$3"
-    echo "[$(date +%H:%M:%S)] simple_inject START $nick"
-    for trial in $(seq 0 $((N_TRIALS - 1))); do
-        python src/simple_inject.py \
-            --target_model_name "${model_name}" \
-            --target_nick_name "${nick}" \
-            --dataset_name "${DATASET_NAME}" \
-            --split_name "test" \
-            --results_dir "${RESULTS_DIR}" \
-            --max_tokens 32768 \
-            --temperature 0.6 \
-            --top_p 1.0 \
-            --client_name "${client}" \
-            --trial_idx "${trial}"
-    done
+    local max_tokens
+    max_tokens=$(get_max_tokens "$nick")
+    echo "[$(date +%H:%M:%S)] simple_inject START $nick (max_tokens=${max_tokens})"
+    python src/simple_inject.py \
+        --target_model_name "${model_name}" \
+        --target_nick_name "${nick}" \
+        --dataset_name "${DATASET_NAME}" \
+        --split_name "test" \
+        --results_dir "${RESULTS_DIR}" \
+        --max_tokens "${max_tokens}" \
+        --temperature 0.6 \
+        --top_p 1.0 \
+        --client_name "${client}"
     echo "[$(date +%H:%M:%S)] simple_inject DONE $nick"
 }
 
-export -f run_model
-export RESULTS_DIR DATASET_NAME N_TRIALS
+export -f get_max_tokens run_model
+export MODELS_YAML DEFAULT_MAX_TOKENS RESULTS_DIR DATASET_NAME
 
 PIDS=()
 for entry in "${MODELS[@]}"; do

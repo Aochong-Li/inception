@@ -62,21 +62,18 @@ TARGET_MODEL_THINK_TEMPLATE = {
 #   client_name      — provider nickname (see core.openaiapi.PROVIDERS).
 #   api_model_name   — provider API model id (when ≠ HF model id).
 #   extra_body       — dict forwarded as-is into the request body.
-#   reasoning_effort — e.g. "high"; folded into extra_body for /v1/completions.
 TARGET_MODEL_OVERRIDES: dict[str, dict] = {
     "deepseek-ai/DeepSeek-V4-Pro": {
         "mode": "chat_completions_prefill",
         "client_name": "deepseek_beta",
         "api_model_name": "deepseek-v4-pro",
         "extra_body": {"thinking": {"type": "enabled"}},
-        "reasoning_effort": "high",
     },
     "deepseek-ai/DeepSeek-V4-Flash": {
         "mode": "completions",
         "client_name": "deepseek_beta",
         "api_model_name": "deepseek-v4-flash",
         "extra_body": {"thinking": {"type": "enabled"}},
-        "reasoning_effort": "high",
     },
     "moonshotai/Kimi-K2.6": {
         "mode": "completions",
@@ -123,8 +120,6 @@ class InceptionEngine:
         client_name: str = "",
         instruct: bool = False,
         target_extra_body: dict | None = None,
-        target_reasoning_effort: str | None = None,
-        trial_idx: int | None = None,
         **kwargs,
     ):
         self.target_model_name = target_model_name
@@ -153,11 +148,7 @@ class InceptionEngine:
         self.min_reasoning_tokens = min_reasoning_tokens
         self.overwrite = overwrite
         self.client_name = client_name
-        # Per-target reasoning controls forwarded to OpenAI_Engine. Default
-        # None preserves existing behavior for callers that do not set them.
         self.target_extra_body = target_extra_body
-        self.target_reasoning_effort = target_reasoning_effort
-        self.trial_idx = trial_idx
 
         # Apply per-target overrides (dict is source of truth; kwargs are the
         # fallback for models not registered in TARGET_MODEL_OVERRIDES).
@@ -167,8 +158,6 @@ class InceptionEngine:
             self.client_name = _overrides["client_name"]
         if "extra_body" in _overrides:
             self.target_extra_body = _overrides["extra_body"]
-        if "reasoning_effort" in _overrides:
-            self.target_reasoning_effort = _overrides["reasoning_effort"]
         # api_model_name overrides the model ID sent to the provider when the
         # provider's API name differs from the HF model identifier.
         self.target_api_model_name = _overrides.get("api_model_name", target_model_name)
@@ -177,9 +166,6 @@ class InceptionEngine:
             self.output_dir = os.path.join(self.results_dir, f"max_iterations_{self.max_iterations}", 'think' if not self.instruct else 'instruct')
         else:
             self.output_dir = os.path.join(self.results_dir, f"max_iterations_{self.max_iterations}", 'think' if not self.instruct else 'instruct', f"architect_initial_max_tokens_{self.architect_initial_max_tokens}")
-        # Per-trial nesting for parallel multi-trial runs.
-        if self.trial_idx is not None:
-            self.output_dir = os.path.join(self.output_dir, f"trial_{self.trial_idx}")
         os.makedirs(self.output_dir, exist_ok=True)
         
         out_pickle = os.path.join(self.output_dir, f"{self.target_nick_name}.pickle")
@@ -281,7 +267,6 @@ class InceptionEngine:
             max_tokens=self.max_tokens,
             mode=self.target_mode,
             extra_body=self.target_extra_body,
-            reasoning_effort=self.target_reasoning_effort,
         )
         
         self.target_engine.run_model(self.overwrite, num_workers=50)
@@ -420,8 +405,6 @@ if __name__=="__main__":
                         help="Overwrite existing results")
     parser.add_argument("--instruct", action="store_true",
                         help="Instruct mode: inject into assistant response instead of <think> block")
-    parser.add_argument("--trial_idx", type=int, default=None,
-                        help="Trial index for parallel multi-trial runs; when set, outputs nest under trial_{idx}/")
 
     args = parser.parse_args()
     engine = InceptionEngine(

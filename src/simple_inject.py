@@ -59,7 +59,6 @@ class SimpleInjectEngine:
         overwrite: bool = False,
         client_name: str = "",
         instruct: bool = False,
-        trial_idx: int | None = None,
     ):
         self.target_model_name = target_model_name
         self.target_nick_name = target_nick_name
@@ -74,20 +73,16 @@ class SimpleInjectEngine:
         self.overwrite = overwrite
         self.client_name = client_name
         self.instruct = instruct
-        self.trial_idx = trial_idx
 
-        # Apply per-target overrides (mode / client / extra_body / reasoning_effort).
+        # Apply per-target overrides (mode / client / extra_body).
         _overrides = TARGET_MODEL_OVERRIDES.get(target_model_name, {})
         self.target_mode = _overrides.get("mode", "completions")
         if "client_name" in _overrides:
             self.client_name = _overrides["client_name"]
         self.target_extra_body = _overrides.get("extra_body")
-        self.target_reasoning_effort = _overrides.get("reasoning_effort")
         self.target_api_model_name = _overrides.get("api_model_name", target_model_name)
 
         self.output_dir = os.path.join(self.results_dir, "simple_inject", "think" if not self.instruct else "instruct")
-        if self.trial_idx is not None:
-            self.output_dir = os.path.join(self.output_dir, f"trial_{self.trial_idx}")
         os.makedirs(self.output_dir, exist_ok=True)
 
         out_pickle = os.path.join(self.output_dir, f"{self.target_nick_name}.pickle")
@@ -136,7 +131,6 @@ class SimpleInjectEngine:
             max_tokens=self.max_tokens,
             mode=self.target_mode,
             extra_body=self.target_extra_body,
-            reasoning_effort=self.target_reasoning_effort,
         )
 
         engine.run_model(self.overwrite, num_workers=50)
@@ -181,8 +175,6 @@ if __name__ == "__main__":
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--instruct", action="store_true",
                         help="Instruct mode: inject into assistant response instead of <think> block")
-    parser.add_argument("--trial_idx", type=int, default=None,
-                        help="Trial index for parallel multi-trial runs; when set, outputs nest under trial_{idx}/")
 
     args = parser.parse_args()
     engine = SimpleInjectEngine(**vars(args))
