@@ -41,10 +41,14 @@ ARCHITECT_MODEL_CHAT_TEMPLATE = {
 TARGET_MODEL_THINK_TEMPLATE = {
     "deepseek-ai/DeepSeek-R1-0528": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>\n{reasoning}''',
     "deepseek-ai/DeepSeek-V3.2": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>{reasoning}''',
+    "deepseek-ai/DeepSeek-V4-Pro": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>{reasoning}''',
+    "deepseek-ai/DeepSeek-V4-Flash": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>{reasoning}''',
     "Qwen/Qwen3-235B-A22B-Thinking-2507": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n<think>\n{reasoning}''',
     "Qwen/Qwen3-Next-80B-A3B-Thinking": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n<think>\n{reasoning}''',
     "moonshotai/Kimi-K2-Thinking": "<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|><|im_user|>user<|im_middle|>{inquiry}<|im_end|><|im_assistant|>assistant<|im_middle|><think> {reasoning}",
+    "moonshotai/Kimi-K2.6": "<|im_user|>user<|im_middle|>{inquiry}<|im_end|><|im_assistant|>assistant<|im_middle|><think>{reasoning}",
     "zai-org/GLM-4.6": "[gMASK]<sop><|user|>\n{inquiry}\n<think>{reasoning}",
+    "zai-org/GLM-5.1": "[gMASK]<sop><|user|>{inquiry}<|assistant|><think>{reasoning}",
     "openai/gpt-oss-120b": '''<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.
 Knowledge cutoff: 2024-06
 Current date: 2025-08-08
@@ -60,6 +64,39 @@ TARGET_MODEL_INSTRUCT_TEMPLATE = {
     "Qwen/Qwen3-Next-80B-A3B-Instruct": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n{reasoning}''',
     "moonshotai/Kimi-K2-Thinking": "<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|>\n<|im_user|>user<|im_middle|>{inquiry}<|im_end|><|im_assistant|>assistant<|im_middle|>{reasoning}",
     "zai-org/GLM-4.6": "[gMASK]<sop><|user|>\n{inquiry}<|assistant|>\n<think></think>\n{reasoning}"
+}
+
+# Per-target overrides that steer the OpenAI_Engine call for a specific model.
+# Only keys that differ from the CLI-arg / default need to be included. Keys:
+#   mode             — "completions" (default) or "chat_completions_prefill".
+#                      chat_completions_prefill is for providers whose
+#                      /v1/completions endpoint does NOT emit `</think>` but
+#                      whose /v1/chat/completions DOES return reasoning via
+#                      `message.reasoning_content` (e.g. DeepSeek V4-Pro).
+#   client_name      — provider nickname (see core.openaiapi.PROVIDERS).
+#   extra_body       — dict forwarded as-is into the request body.
+#   reasoning_effort — e.g. "high"; folded into extra_body for /v1/completions.
+TARGET_MODEL_OVERRIDES: dict[str, dict] = {
+    "deepseek-ai/DeepSeek-V4-Pro": {
+        "mode": "chat_completions_prefill",
+        "client_name": "deepseek",  # /v1/chat/completions uses /v1 (not /beta)
+        "extra_body": {"thinking": {"type": "enabled"}},
+        "reasoning_effort": "high",
+    },
+    "deepseek-ai/DeepSeek-V4-Flash": {
+        "mode": "completions",
+        "client_name": "deepseek_beta",
+        "extra_body": {"thinking": {"type": "enabled"}},
+        "reasoning_effort": "high",
+    },
+    "moonshotai/Kimi-K2.6": {
+        "mode": "completions",
+        "extra_body": {"thinking": {"type": "enabled", "keep": "all"}},
+    },
+    "zai-org/GLM-5.1": {
+        "mode": "completions",
+        "extra_body": {"chat_template_kwargs": {"enable_thinking": True}},
+    },
 }
 
 class InceptionEngine:
@@ -88,6 +125,8 @@ class InceptionEngine:
         overwrite: bool = False,
         client_name: str = "",
         instruct: bool = False,
+        target_extra_body: dict | None = None,
+        target_reasoning_effort: str | None = None,
         **kwargs,
     ):
         self.target_model_name = target_model_name
@@ -116,6 +155,21 @@ class InceptionEngine:
         self.min_reasoning_tokens = min_reasoning_tokens
         self.overwrite = overwrite
         self.client_name = client_name
+        # Per-target reasoning controls forwarded to OpenAI_Engine. Default
+        # None preserves existing behavior for callers that do not set them.
+        self.target_extra_body = target_extra_body
+        self.target_reasoning_effort = target_reasoning_effort
+
+        # Apply per-target overrides (dict is source of truth; kwargs are the
+        # fallback for models not registered in TARGET_MODEL_OVERRIDES).
+        _overrides = TARGET_MODEL_OVERRIDES.get(target_model_name, {})
+        self.target_mode = _overrides.get("mode", "completions")
+        if "client_name" in _overrides:
+            self.client_name = _overrides["client_name"]
+        if "extra_body" in _overrides:
+            self.target_extra_body = _overrides["extra_body"]
+        if "reasoning_effort" in _overrides:
+            self.target_reasoning_effort = _overrides["reasoning_effort"]
 
         self.output_dir = os.path.join(self.results_dir, 'think' if not self.instruct else 'instruct', f"max_iterations_{self.max_iterations}")
         os.makedirs(self.output_dir, exist_ok=True)
@@ -201,7 +255,14 @@ class InceptionEngine:
 
     def target_engine_cont(self, iteration_idx: int) -> pd.DataFrame:
         nick_name = f"{self.target_nick_name}_iteration_{iteration_idx}"
-        self.df['prompt'] = self.df.apply(lambda x: self.target_chat_template.format(inquiry=x['inquiry'], reasoning=x['reasoning']), axis=1)
+        # For prefill chat mode, OpenAI_Engine reads inquiry/reasoning directly
+        # and does NOT apply self.target_chat_template. For completions mode
+        # (the historical path) we still format `prompt` from the template.
+        if self.target_mode == "chat_completions_prefill":
+            # No-op on `prompt`; the engine will pick up inquiry + reasoning.
+            pass
+        else:
+            self.df['prompt'] = self.df.apply(lambda x: self.target_chat_template.format(inquiry=x['inquiry'], reasoning=x['reasoning']), axis=1)
 
         self.target_engine = OpenAI_Engine(
             input_df=self.df,
@@ -212,7 +273,9 @@ class InceptionEngine:
             client_name=self.client_name,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
-            mode="completions"
+            mode=self.target_mode,
+            extra_body=self.target_extra_body,
+            reasoning_effort=self.target_reasoning_effort,
         )
         
         self.target_engine.run_model(self.overwrite, num_workers=50)

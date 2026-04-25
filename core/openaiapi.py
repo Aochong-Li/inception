@@ -38,12 +38,15 @@ logger.setLevel(logging.INFO)
 # Provider registry – add new providers in one place
 # ---------------------------------------------------------------------------
 PROVIDERS: Dict[str, Dict[str, Any]] = {
-    "openai":     {"env": "OPENAI_API_KEY",     "base_url": None},
-    "deepseek":   {"env": "DEEPSEEK_API_KEY",   "base_url": "https://api.deepseek.com"},
-    "togetherai": {"env": "TOGETHERAI_API_KEY", "base_url": "https://api.together.xyz/v1"},
-    "openrouter": {"env": "OPENROUTER_API_KEY", "base_url": "https://openrouter.ai/api/v1"},
-    "deepinfra":  {"env": "DEEPINFRA_API_KEY",  "base_url": "https://api.deepinfra.com/v1/openai"},
-    "vllm_local": {"env": "VLLM_API_KEY",       "base_url": os.environ.get("VLLM_BASE_URL", "http://localhost:8000/v1")},
+    "openai":         {"env": "OPENAI_API_KEY",     "base_url": None},
+    "deepseek":       {"env": "DEEPSEEK_API_KEY",   "base_url": "https://api.deepseek.com"},
+    # DeepSeek requires the /beta base_url for the raw /v1/completions endpoint.
+    # Use "deepseek_beta" for mode="completions" with DeepSeek models.
+    "deepseek_beta":  {"env": "DEEPSEEK_API_KEY",   "base_url": "https://api.deepseek.com/beta"},
+    "togetherai":     {"env": "TOGETHERAI_API_KEY", "base_url": "https://api.together.xyz/v1"},
+    "openrouter":     {"env": "OPENROUTER_API_KEY", "base_url": "https://openrouter.ai/api/v1"},
+    "deepinfra":      {"env": "DEEPINFRA_API_KEY",  "base_url": "https://api.deepinfra.com/v1/openai"},
+    "vllm_local":     {"env": "VLLM_API_KEY",       "base_url": os.environ.get("VLLM_BASE_URL", "http://localhost:8000/v1")},
 }
 
 RETRYABLE = (RateLimitError, APIError, APIConnectionError, APITimeoutError)
@@ -350,13 +353,29 @@ def generate_chat_completions(
     stop: Optional[List[str]] = None,
     max_attempts: int = 3,
     rate_limiter: Optional["TokenBucketRateLimiter"] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    reasoning_effort: Optional[str] = None,
+    messages_override: Optional[List[Dict[str, str]]] = None,
 ) -> Tuple[Optional[List[str]], Optional[str], List[str], int]:
-    """Returns (content, finish_reason, errors, attempt). finish_reason is 'length' when truncated."""
+    """Returns (content, finish_reason, errors, attempt). finish_reason is 'length' when truncated.
+
+    ``extra_body`` is forwarded as-is to the OpenAI SDK (e.g. provider-specific
+    ``{"thinking": {"type": "enabled"}}`` or
+    ``{"chat_template_kwargs": {"enable_thinking": true}}``).
+    ``reasoning_effort`` (e.g. "high") is forwarded as a top-level kwarg when
+    supported by the chat.completions endpoint.
+    ``messages_override``: if provided, replaces the default ``[system, user]``
+    message list. Used for assistant-prefill continuations where the caller
+    needs to pass ``[{user}, {assistant, "<think>..."}]``.
+    """
     client = create_client(client_name)
-    messages = [
-        {"role": "system", "content": developer_message},
-        {"role": "user", "content": input_prompt},
-    ]
+    if messages_override is not None:
+        messages = messages_override
+    else:
+        messages = [
+            {"role": "system", "content": developer_message},
+            {"role": "user", "content": input_prompt},
+        ]
 
     errors: List[str] = []
     for attempt in range(1, max_attempts + 1):
@@ -373,6 +392,10 @@ def generate_chat_completions(
                     presence_penalty=presence_penalty,
                     stop=stop,
                 )
+            if extra_body is not None:
+                kwargs["extra_body"] = extra_body
+            if reasoning_effort is not None:
+                kwargs["reasoning_effort"] = reasoning_effort
             resp = client.chat.completions.create(**kwargs)
             # Restore rate after a successful call
             if rate_limiter is not None:
@@ -384,7 +407,17 @@ def generate_chat_completions(
                     f"{c.message.reasoning_content}\n</think>\n{c.message.content}" for c in resp.choices
                 ]
             else:
-                content = [c.message.content for c in resp.choices]
+                # Generalized: if the provider returned a reasoning_content
+                # field (e.g. DeepSeek V4-Pro chat endpoint), synthesize the
+                # <think>{reasoning}</think>{content} envelope so downstream
+                # code that expects `</think>` as a delimiter keeps working.
+                def _assemble(c):
+                    rc = getattr(c.message, "reasoning_content", None)
+                    ct = c.message.content or ""
+                    if rc:
+                        return f"<think>{rc}</think>{ct}"
+                    return ct
+                content = [_assemble(c) for c in resp.choices]
             return content, finish_reason, errors, attempt
         except RateLimitError as exc:
             errors.append(repr(exc))
@@ -444,8 +477,16 @@ def generate_completions(
     stop: Optional[List[str]] = None,
     max_attempts: int = 3,
     rate_limiter: Optional["TokenBucketRateLimiter"] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> Tuple[Optional[List[str]], Optional[str], List[str], int]:
-    """Returns (content, finish_reason, errors, attempt). finish_reason is 'length' when truncated."""
+    """Returns (content, finish_reason, errors, attempt). finish_reason is 'length' when truncated.
+
+    ``extra_body`` is forwarded as-is to the OpenAI SDK on the /v1/completions
+    endpoint. ``reasoning_effort`` is NOT a top-level kwarg on
+    ``client.completions.create``; if supplied here, it is folded into
+    ``extra_body`` so the router sees it as a body field.
+    """
     client = create_client(client_name)
 
     errors: List[str] = []
@@ -460,6 +501,13 @@ def generate_completions(
                     presence_penalty=presence_penalty,
                     stop=stop,
                 )
+            # Fold reasoning_effort into extra_body because the SDK's
+            # completions.create() does NOT accept it as a top-level kwarg.
+            merged_extra_body = dict(extra_body) if extra_body else {}
+            if reasoning_effort is not None and "reasoning_effort" not in merged_extra_body:
+                merged_extra_body["reasoning_effort"] = reasoning_effort
+            if merged_extra_body:
+                kwargs["extra_body"] = merged_extra_body
             resp = client.completions.create(**kwargs)
             # Restore rate after a successful call
             if rate_limiter is not None:
@@ -576,9 +624,22 @@ def _process(
         effective_temperature = _original_temperature + (validation_attempt - 1) * 0.1
 
         if func_name == "chat_completions":
+            # Detect prefill-style message lists: if the body's messages are
+            # NOT the default [system, user] shape (e.g. they are
+            # [user, assistant-prefill]), pass them through verbatim via
+            # messages_override so the continuation semantics are preserved.
+            _msgs = body.get("messages") or []
+            _is_default_shape = (
+                len(_msgs) == 2
+                and _msgs[0].get("role") in ("system", "developer")
+                and _msgs[1].get("role") == "user"
+            )
+            _override = None if _is_default_shape else _msgs
+            _dev = _msgs[0]["content"] if _is_default_shape else ""
+            _user = _msgs[1]["content"] if _is_default_shape else ""
             response, finish_reason, errs, tries = generate_chat_completions(
-                input_prompt=body["messages"][1]["content"],
-                developer_message=body["messages"][0]["content"],
+                input_prompt=_user,
+                developer_message=_dev,
                 model=body["model"],
                 client_name=req["client_name"],
                 temperature=effective_temperature,
@@ -590,6 +651,9 @@ def _process(
                 stop=body.get("stop"),
                 max_attempts=max_api_attempts,
                 rate_limiter=rate_limiter,
+                extra_body=body.get("extra_body"),
+                reasoning_effort=body.get("reasoning_effort"),
+                messages_override=_override,
             )
         elif func_name == "completions":
             response, finish_reason, errs, tries = generate_completions(
@@ -605,6 +669,8 @@ def _process(
                 stop=body.get("stop"),
                 max_attempts=max_api_attempts,
                 rate_limiter=rate_limiter,
+                extra_body=body.get("extra_body"),
+                reasoning_effort=body.get("reasoning_effort"),
             )
         else:
             raise ValueError(f"Unknown function name: {func_name}")
@@ -919,24 +985,31 @@ def batch_completions_template(
     top_p: float = 1.0,
     frequency_penalty: float = 0.0,
     presence_penalty: float = 0.0,
-    stop: Optional[list[str]] = None
+    stop: Optional[list[str]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    reasoning_effort: Optional[str] = None,
 ):
+    body: Dict[str, Any] = {
+        "model": model,
+        "temperature": temperature,
+        "prompt": input_prompt,
+        "max_tokens": max_tokens,
+        "n": n,
+        "top_p": top_p,
+        "frequency_penalty": frequency_penalty,
+        "presence_penalty": presence_penalty,
+        "stop": stop,
+    }
+    if extra_body is not None:
+        body["extra_body"] = extra_body
+    if reasoning_effort is not None:
+        body["reasoning_effort"] = reasoning_effort
     query_template = {
         "custom_id": custom_id,
         "client_name": client_name,
         "method": "POST",
         "url": "/v1/completions",
-        "body": {
-            "model": model,
-            "temperature": temperature,
-            "prompt": input_prompt,
-            "max_tokens": max_tokens,
-            "n": n,
-            "top_p": top_p,
-            "frequency_penalty": frequency_penalty,
-            "presence_penalty": presence_penalty,
-            "stop": stop
-        }
+        "body": body,
     }
     return query_template
 
@@ -952,29 +1025,85 @@ def batch_chat_completions_template(
     top_p: float = 1.0,
     frequency_penalty: float = 0.0,
     presence_penalty: float = 0.0,
-    stop: Optional[list[str]] = None
+    stop: Optional[list[str]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    reasoning_effort: Optional[str] = None,
 ):
+    body: Dict[str, Any] = {
+        "model": model,
+        "temperature": temperature,
+        "messages": [
+            {"role": "developer", "content": developer_message},
+            {"role": "user", "content": input_prompt},
+        ],
+        "max_tokens": max_tokens,
+        "n": n,
+        "top_p": top_p,
+        "frequency_penalty": frequency_penalty,
+        "presence_penalty": presence_penalty,
+        "stop": stop,
+    }
+    if extra_body is not None:
+        body["extra_body"] = extra_body
+    if reasoning_effort is not None:
+        body["reasoning_effort"] = reasoning_effort
     query_template = {
         "custom_id": custom_id,
         "client_name": client_name,
         "method": "POST",
         "url": "/v1/chat/completions",
-        "body": {
-            "model": model,
-            "temperature": temperature,
-            "messages": [
-                {"role": "developer", "content": developer_message},
-                {"role": "user", "content": input_prompt}
-            ],
-            "max_tokens": max_tokens,
-            "n": n,
-            "top_p": top_p,
-            "frequency_penalty": frequency_penalty,
-            "presence_penalty": presence_penalty,
-            "stop": stop
-        }
+        "body": body,
     }
     return query_template
+
+def batch_chat_completions_prefill_template(
+    inquiry: str,
+    reasoning: str,
+    model: str = 'gpt-4o',
+    client_name: str = '',
+    custom_id: str = '',
+    temperature: float = 0.0,
+    max_tokens: int = 32768,
+    n: int = 1,
+    top_p: float = 1.0,
+    frequency_penalty: float = 0.0,
+    presence_penalty: float = 0.0,
+    stop: Optional[list[str]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    reasoning_effort: Optional[str] = None,
+):
+    """Assistant-prefill chat body: [{user: inquiry}, {assistant: "<think>" + reasoning}].
+
+    Used for providers whose chat endpoint does NOT emit `</think>` on /v1/completions
+    but does accept assistant-prefill continuations (e.g. DeepSeek V4-Pro).
+    """
+    body: Dict[str, Any] = {
+        "model": model,
+        "temperature": temperature,
+        "messages": [
+            {"role": "user", "content": inquiry},
+            {"role": "assistant", "content": "<think>" + reasoning},
+        ],
+        "max_tokens": max_tokens,
+        "n": n,
+        "top_p": top_p,
+        "frequency_penalty": frequency_penalty,
+        "presence_penalty": presence_penalty,
+        "stop": stop,
+    }
+    if extra_body is not None:
+        body["extra_body"] = extra_body
+    if reasoning_effort is not None:
+        body["reasoning_effort"] = reasoning_effort
+    query_template = {
+        "custom_id": custom_id,
+        "client_name": client_name,
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": body,
+    }
+    return query_template
+
 
 def retrieve_batch_output_file_id(batch_log_id: str, model = 'gpt'):
     client = create_client(model)
