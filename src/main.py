@@ -79,13 +79,15 @@ TARGET_MODEL_INSTRUCT_TEMPLATE = {
 TARGET_MODEL_OVERRIDES: dict[str, dict] = {
     "deepseek-ai/DeepSeek-V4-Pro": {
         "mode": "chat_completions_prefill",
-        "client_name": "deepseek",  # /v1/chat/completions uses /v1 (not /beta)
+        "client_name": "deepseek_beta",  # prefill requires /beta base URL
+        "api_model_name": "deepseek-v4-pro",  # DeepSeek API name (≠ HF model ID)
         "extra_body": {"thinking": {"type": "enabled"}},
         "reasoning_effort": "high",
     },
     "deepseek-ai/DeepSeek-V4-Flash": {
         "mode": "completions",
         "client_name": "deepseek_beta",
+        "api_model_name": "deepseek-v4-flash",  # DeepSeek API name (≠ HF model ID)
         "extra_body": {"thinking": {"type": "enabled"}},
         "reasoning_effort": "high",
     },
@@ -127,8 +129,11 @@ class InceptionEngine:
         instruct: bool = False,
         target_extra_body: dict | None = None,
         target_reasoning_effort: str | None = None,
+        trial_idx: int | None = None,
+        architect_stub_text: str | None = None,
         **kwargs,
     ):
+        self.architect_stub_text = architect_stub_text
         self.target_model_name = target_model_name
         self.architect_model_name = architect_model_name
         self.target_nick_name = target_nick_name
@@ -159,6 +164,7 @@ class InceptionEngine:
         # None preserves existing behavior for callers that do not set them.
         self.target_extra_body = target_extra_body
         self.target_reasoning_effort = target_reasoning_effort
+        self.trial_idx = trial_idx
 
         # Apply per-target overrides (dict is source of truth; kwargs are the
         # fallback for models not registered in TARGET_MODEL_OVERRIDES).
@@ -170,8 +176,23 @@ class InceptionEngine:
             self.target_extra_body = _overrides["extra_body"]
         if "reasoning_effort" in _overrides:
             self.target_reasoning_effort = _overrides["reasoning_effort"]
+        # api_model_name overrides the model ID sent to the provider when the
+        # provider's API name differs from the HF model identifier.
+        self.target_api_model_name = _overrides.get("api_model_name", target_model_name)
 
         self.output_dir = os.path.join(self.results_dir, 'think' if not self.instruct else 'instruct', f"max_iterations_{self.max_iterations}")
+        # Ablation subdir (max_iter=1 with non-default architect_initial_max_tokens).
+        # Mirrors the canonical layout at /share/goyal/lio/inception/model_responses
+        # where max_iterations_1/think/architect_initial_max_tokens_{128,512,768,1024}/
+        # holds the non-256 ablations.
+        if self.max_iterations == 1 and self.architect_initial_max_tokens != 256:
+            self.output_dir = os.path.join(
+                self.output_dir,
+                f"architect_initial_max_tokens_{self.architect_initial_max_tokens}",
+            )
+        # Per-trial nesting for parallel 10-trial runs.
+        if self.trial_idx is not None:
+            self.output_dir = os.path.join(self.output_dir, f"trial_{self.trial_idx}")
         os.makedirs(self.output_dir, exist_ok=True)
         
         out_pickle = os.path.join(self.output_dir, f"{self.target_nick_name}.pickle")
@@ -179,18 +200,22 @@ class InceptionEngine:
             print(f"Inception results for {self.target_nick_name} already exists")
             exit()
 
-        self.architect_tokenizer = AutoTokenizer.from_pretrained(self.architect_model_name)
-        self.architect_engine = OpenLMEngine(
-            ModelConfig(
-                model_name=self.architect_model_name,
-                tokenizer_name=self.architect_model_name,
-                max_tokens=self.architect_initial_max_tokens,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                top_k=self.top_k
+        if self.architect_stub_text is None:
+            self.architect_tokenizer = AutoTokenizer.from_pretrained(self.architect_model_name)
+            self.architect_engine = OpenLMEngine(
+                ModelConfig(
+                    model_name=self.architect_model_name,
+                    tokenizer_name=self.architect_model_name,
+                    max_tokens=self.architect_initial_max_tokens,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
+                    top_k=self.top_k
 
+                )
             )
-        )
+        else:
+            self.architect_tokenizer = AutoTokenizer.from_pretrained(self.architect_model_name)
+            self.architect_engine = None
         os.makedirs(self.output_dir + f"/api", exist_ok=True)
         self.target_engine = OpenAI_Engine(input_df=pd.DataFrame())
 
@@ -240,10 +265,16 @@ class InceptionEngine:
         print(f"Checkpoint saved: iteration {iteration_idx}")
 
     def architect_engine_cont(self, iteration_idx: int) -> None:
+        if self.architect_stub_text is not None:
+            self.df[f'architect_iteration_{iteration_idx}'] = self.architect_stub_text
+            self.df['reasoning'] = self.df['reasoning'] + self.architect_stub_text
+            self.df['reasoning'] = self.df['reasoning'].apply(lambda x: x.strip())
+            return
+
         self.df['prompt'] = self.df.apply(lambda x: self.architect_chat_template.format(inquiry=x['inquiry'], reasoning=x['reasoning']), axis=1)
         max_tokens = self.architect_initial_max_tokens if iteration_idx == 0 else self.architect_reiterate_max_tokens
         sampling_overrides = len(self.df) * [{'max_tokens': max_tokens}]
-        
+
         response = self.architect_engine.generate(prompts=self.df['prompt'], new_sampling_params=sampling_overrides)
         response['response'] = response['response'].apply(lambda x: x.split("</think>")[1].rstrip() if "</think>" in x else x)
 
@@ -269,7 +300,7 @@ class InceptionEngine:
             nick_name= nick_name,
             batch_io_root=str(Path.home()) + "/research/openai_batch_io/wmdp",
             cache_filepath=os.path.join(self.output_dir, "api", f"{nick_name}.pickle"),
-            model=self.target_model_name,
+            model=self.target_api_model_name,
             client_name=self.client_name,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
@@ -414,6 +445,10 @@ if __name__=="__main__":
                         help="Overwrite existing results")
     parser.add_argument("--instruct", action="store_true",
                         help="Instruct mode: inject into assistant response instead of <think> block")
+    parser.add_argument("--trial_idx", type=int, default=None,
+                        help="Trial index for parallel 10-trial runs; when set, outputs nest under trial_{idx}/")
+    parser.add_argument("--architect_stub_text", type=str, default=None,
+                        help="If set, bypass the architect model and use this fixed string as architect_iteration_{i} for all rows (parse-test mode).")
 
     args = parser.parse_args()
     
