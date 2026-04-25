@@ -2,6 +2,7 @@
 
 import os
 import json
+from typing import Any, Dict, Optional
 
 try:
     from . import openaiapi
@@ -38,6 +39,8 @@ class OpenAI_Engine():
         category: str = None,
         max_validation_retries: int = 3,
         max_consecutive_refusals: int = 0,
+        extra_body: Optional[Dict[str, Any]] = None,
+        reasoning_effort: Optional[str] = None,
     ):
         self.input_df = input_df
         self.prompt_template = prompt_template
@@ -63,6 +66,11 @@ class OpenAI_Engine():
         self.category = category
         self.max_validation_retries = max_validation_retries
         self.max_consecutive_refusals = max_consecutive_refusals
+        # Provider-specific reasoning controls. Forwarded per-request into the
+        # JSONL body so the /v1/completions and /v1/chat/completions workers
+        # send them on every call.
+        self.extra_body = extra_body
+        self.reasoning_effort = reasoning_effort
 
     def prepare_chat_completions_input(self):
         """Prepare batch input file with prompts formatted from the input dataframe."""
@@ -88,12 +96,48 @@ class OpenAI_Engine():
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
                 n=self.n,
-                top_p=self.top_p
+                top_p=self.top_p,
+                extra_body=self.extra_body,
+                reasoning_effort=self.reasoning_effort,
             )
 
             openaiapi.cache_batch_query(self.input_filepath, query)
 
         logger.info(f'Batch input prepared and stored at {self.input_filepath}')
+
+    def prepare_chat_completions_prefill_input(self):
+        """Prepare chat-completions input using assistant-prefill messages.
+
+        Each row must provide ``inquiry`` and ``reasoning`` columns. The built
+        body has messages=[{user: inquiry}, {assistant: "<think>"+reasoning}],
+        which lets providers (e.g. DeepSeek V4-Pro) that don't emit `</think>`
+        on /v1/completions still accept the architect's partial reasoning as a
+        continuation seed.
+        """
+        assert self.input_filepath is not None, 'input_filepath is required'
+        assert 'inquiry' in self.input_df.columns, "prefill mode requires 'inquiry' column"
+        assert 'reasoning' in self.input_df.columns, "prefill mode requires 'reasoning' column"
+
+        if self.input_filepath.exists():
+            self.input_filepath.unlink()
+
+        for idx, row in tqdm(self.input_df.iterrows(), total=len(self.input_df)):
+            query = openaiapi.batch_chat_completions_prefill_template(
+                inquiry=row['inquiry'],
+                reasoning=row['reasoning'],
+                model=self.model,
+                client_name=self.client_name,
+                custom_id=f'idx_{idx}',
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                n=self.n,
+                top_p=self.top_p,
+                extra_body=self.extra_body,
+                reasoning_effort=self.reasoning_effort,
+            )
+            openaiapi.cache_batch_query(self.input_filepath, query)
+
+        logger.info(f'Prefill chat-completions input prepared at {self.input_filepath}')
 
     def prepare_completions_input(self):
         """Prepare batch input file with prompts formatted from the input dataframe."""
@@ -113,7 +157,9 @@ class OpenAI_Engine():
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
                 n=self.n,
-                top_p=self.top_p
+                top_p=self.top_p,
+                extra_body=self.extra_body,
+                reasoning_effort=self.reasoning_effort,
             )
 
             openaiapi.cache_batch_query(self.input_filepath, query)
@@ -163,13 +209,30 @@ class OpenAI_Engine():
                 max_validation_retries=self.max_validation_retries,
                 max_consecutive_refusals=self.max_consecutive_refusals,
             )
+        elif self.mode == 'chat_completions_prefill':
+            # Assistant-prefill chat mode: bypass template formatting and send
+            # [{user: inquiry}, {assistant: "<think>"+reasoning}] as messages.
+            # Required for providers (e.g. DeepSeek V4-Pro) that only surface
+            # reasoning via /v1/chat/completions's reasoning_content field.
+            self.prepare_chat_completions_prefill_input()
+            openaiapi.generate_parallel_completions(
+                input_filepath=self.input_filepath,
+                cache_filepath=self.cache_filepath,
+                num_workers=num_workers,
+                func_name="chat_completions",
+                requests_per_second=self.requests_per_second,
+                validate_fn=self.validate_fn,
+                category=self.category,
+                max_validation_retries=self.max_validation_retries,
+                max_consecutive_refusals=self.max_consecutive_refusals,
+            )
 
         logger.info(f'Results are generated and check {self.batch_log_filepath}')
 
     def retrieve_outputs(self, overwrite=False, cancel_in_progress_jobs: bool = False):
         """Retrieve generated outputs from cache or batch logs."""
         if self.cache_filepath and Path(self.cache_filepath).exists() \
-            and (self.mode == 'chat_completions' or self.mode == 'batch_chat_completions' or self.mode == 'completions'):
+            and (self.mode == 'chat_completions' or self.mode == 'batch_chat_completions' or self.mode == 'completions' or self.mode == 'chat_completions_prefill'):
             logger.info(f'Results are retrieved from {self.cache_filepath}')
             output_df = pd.read_pickle(self.cache_filepath)
         
