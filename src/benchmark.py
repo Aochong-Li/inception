@@ -217,9 +217,6 @@ if __name__=="__main__":
                         help="JSON string passed as extra_body to the API request")
     args = parser.parse_args()
 
-    # Apply per-target overrides at __main__ level so client_name, mode,
-    # extra_body, and api_model_name flow through to BenchmarkEval
-    # consistently with src/main.py and src/simple_inject.py.
     import json as _json
     from src.main import TARGET_MODEL_OVERRIDES
     args_dict = vars(args)
