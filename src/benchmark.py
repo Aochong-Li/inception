@@ -217,14 +217,17 @@ if __name__=="__main__":
                         help="JSON string passed as extra_body to the API request")
     args = parser.parse_args()
 
+    # Apply per-target overrides at __main__ level. Benchmark sends a plain
+    # user inquiry (no architect/injection reasoning) so it always uses the
+    # default mode="chat_completions" — the override's `mode` field (which is
+    # for inception/simple_inject's reasoning-injection paths) is intentionally
+    # NOT applied here.
     import json as _json
     from src.main import TARGET_MODEL_OVERRIDES
     args_dict = vars(args)
     _overrides = TARGET_MODEL_OVERRIDES.get(args_dict['model_name'], {})
     if 'client_name' in _overrides and not args_dict.get('client_name'):
         args_dict['client_name'] = _overrides['client_name']
-    if 'mode' in _overrides:
-        args_dict['mode'] = _overrides['mode']
     if 'extra_body' in _overrides:
         args_dict['extra_body'] = _overrides['extra_body']
     elif args_dict.get('extra_body'):
