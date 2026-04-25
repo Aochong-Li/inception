@@ -1,4 +1,5 @@
 import os
+import json
 import pandas as pd
 from transformers import AutoModelForCausalLM
 from core.llm_engine import *
@@ -40,7 +41,10 @@ class BenchmarkEval(OpenLMEngine):
                  max_num_batched_tokens: int = 8192,
                  overwrite: bool = False,
                  client_name: str = '',
-                 filename_suffix: str = ''
+                 filename_suffix: str = '',
+                 trial_idx: int | None = None,
+                 extra_body: dict | None = None,
+                 reasoning_effort: str | None = None,
                  ):
 
         # Initialize attributes first
@@ -60,7 +64,12 @@ class BenchmarkEval(OpenLMEngine):
         self.client_name = client_name
         self.filename_suffix = filename_suffix
         self.system_prompt = system_prompt
+        self.trial_idx = trial_idx
+        self.extra_body = extra_body
+        self.reasoning_effort = reasoning_effort
 
+        if self.trial_idx is not None:
+            self.output_dir = os.path.join(self.output_dir, f"trial_{self.trial_idx}")
         os.makedirs(self.output_dir, exist_ok=True)
         self.output_filepath = os.path.join(
             self.output_dir, f"{self.nick_name}{self.filename_suffix if self.filename_suffix else ''}.pickle"
@@ -166,7 +175,9 @@ class BenchmarkEval(OpenLMEngine):
             temperature=self.temperature,
             max_tokens=self.max_tokens,
             n=self.sample_k,
-            mode="chat_completions"
+            mode="chat_completions",
+            extra_body=self.extra_body,
+            reasoning_effort=self.reasoning_effort,
         )
         engine.run_model(overwrite=self.overwrite)
         self.response = engine.retrieve_outputs(overwrite=self.overwrite)
@@ -213,12 +224,21 @@ if __name__=="__main__":
                         help="Maximum number of tokens to batch")
     parser.add_argument("--client_name", type=str, default='',
                         help="Name of the client to use")
+    parser.add_argument("--trial_idx", type=int, default=None,
+                        help="Trial index for parallel 10-trial runs; nests output_dir under trial_{idx}/")
+    parser.add_argument("--extra_body_json", type=str, default=None,
+                        help="JSON string forwarded as extra_body on each request")
+    parser.add_argument("--reasoning_effort", type=str, default=None,
+                        help="reasoning_effort kwarg (e.g. 'high')")
     args = parser.parse_args()
+    extra_body = json.loads(args.extra_body_json) if args.extra_body_json else None
+    args_dict = vars(args)
+    args_dict.pop("extra_body_json", None)
+    args_dict["extra_body"] = extra_body
 
     SYSTEM_PROMPT = None
     engine = BenchmarkEval(
-        **vars(args),
+        **args_dict,
         system_prompt=SYSTEM_PROMPT
     )
-    import pdb; pdb.set_trace()
     engine.eval()
