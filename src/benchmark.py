@@ -212,7 +212,7 @@ if __name__=="__main__":
 
     parser.add_argument("--overwrite", type=str2bool, default=False)
     parser.add_argument("--mode", type=str, default="chat_completions",
-                        help="OpenAI_Engine mode (chat_completions / completions / chat_completions_prefill)")
+                        help="OpenAI_Engine mode (chat_completions / completions)")
     parser.add_argument("--extra_body", type=str, default=None,
                         help="JSON string passed as extra_body to the API request")
     args = parser.parse_args()

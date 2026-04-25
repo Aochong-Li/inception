@@ -157,25 +157,18 @@ def generate_chat_completions(
     max_attempts: int = 3,
     rate_limiter: Optional["TokenBucketRateLimiter"] = None,
     extra_body: Optional[Dict[str, Any]] = None,
-    messages_override: Optional[List[Dict[str, str]]] = None,
 ) -> Tuple[Optional[List[str]], Optional[str], List[str], int]:
     """Returns (content, finish_reason, errors, attempt). finish_reason is 'length' when truncated.
 
     ``extra_body`` is forwarded as-is to the OpenAI SDK (e.g. provider-specific
     ``{"thinking": {"type": "enabled"}}`` or
     ``{"chat_template_kwargs": {"enable_thinking": true}}``).
-    ``messages_override``: if provided, replaces the default ``[system, user]``
-    message list. Used for assistant-prefill continuations where the caller
-    needs to pass ``[{user}, {assistant, "<think>..."}]``.
     """
     client = create_client(client_name)
-    if messages_override is not None:
-        messages = messages_override
-    else:
-        messages = [
-            {"role": "system", "content": developer_message},
-            {"role": "user", "content": input_prompt},
-        ]
+    messages = [
+        {"role": "system", "content": developer_message},
+        {"role": "user", "content": input_prompt},
+    ]
 
     errors: List[str] = []
     for attempt in range(1, max_attempts + 1):
@@ -392,19 +385,9 @@ def _process(
             )
 
     if func_name == "chat_completions":
-        # Detect prefill-style message lists: if the body's messages are
-        # NOT the default [system, user] shape (e.g. they are
-        # [user, assistant-prefill]), pass them through verbatim via
-        # messages_override so the continuation semantics are preserved.
         _msgs = body.get("messages") or []
-        _is_default_shape = (
-            len(_msgs) == 2
-            and _msgs[0].get("role") in ("system", "developer")
-            and _msgs[1].get("role") == "user"
-        )
-        _override = None if _is_default_shape else _msgs
-        _dev = _msgs[0]["content"] if _is_default_shape else ""
-        _user = _msgs[1]["content"] if _is_default_shape else ""
+        _dev = _msgs[0]["content"] if (_msgs and _msgs[0].get("role") in ("system", "developer")) else ""
+        _user = _msgs[1]["content"] if len(_msgs) > 1 else (_msgs[0]["content"] if _msgs else "")
         response, finish_reason, errs, tries = generate_chat_completions(
             input_prompt=_user,
             developer_message=_dev,
@@ -420,7 +403,6 @@ def _process(
             max_attempts=max_api_attempts,
             rate_limiter=rate_limiter,
             extra_body=body.get("extra_body"),
-            messages_override=_override,
         )
     elif func_name == "completions":
         response, finish_reason, errs, tries = generate_completions(
@@ -621,52 +603,6 @@ def batch_chat_completions_template(
         "body": body,
     }
     return query_template
-
-def batch_chat_completions_prefill_template(
-    inquiry: str,
-    reasoning: str,
-    model: str = 'gpt-4o',
-    client_name: str = '',
-    custom_id: str = '',
-    temperature: float = 0.0,
-    max_tokens: int = 32768,
-    n: int = 1,
-    top_p: float = 1.0,
-    frequency_penalty: float = 0.0,
-    presence_penalty: float = 0.0,
-    stop: Optional[list[str]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-):
-    """Assistant-prefill chat body: [{user: inquiry}, {assistant: "<think>" + reasoning}].
-
-    Used for providers whose chat endpoint does NOT emit `</think>` on /v1/completions
-    but does accept assistant-prefill continuations (e.g. DeepSeek V4-Pro).
-    """
-    body: Dict[str, Any] = {
-        "model": model,
-        "temperature": temperature,
-        "messages": [
-            {"role": "user", "content": inquiry},
-            {"role": "assistant", "content": "<think>" + reasoning},
-        ],
-        "max_tokens": max_tokens,
-        "n": n,
-        "top_p": top_p,
-        "frequency_penalty": frequency_penalty,
-        "presence_penalty": presence_penalty,
-        "stop": stop,
-    }
-    if extra_body is not None:
-        body["extra_body"] = extra_body
-    query_template = {
-        "custom_id": custom_id,
-        "client_name": client_name,
-        "method": "POST",
-        "url": "/v1/chat/completions",
-        "body": body,
-    }
-    return query_template
-
 
 def cache_batch_query(filepath: str, query: dict):
     with open(filepath, 'a') as f:

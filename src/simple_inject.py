@@ -17,13 +17,14 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 from core.openai_engine import OpenAI_Engine
-from src.main import TARGET_MODEL_OVERRIDES
+from src.main import TARGET_MODEL_OVERRIDES, TARGET_MODEL_THINK_TEMPLATE as _MAIN_THINK
+from src.main import _DSV4_MAX_EFFORT_THINK
 
 TARGET_MODEL_THINK_TEMPLATE = {
     "deepseek-ai/DeepSeek-R1-0528": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>\n{reasoning}''',
     "deepseek-ai/DeepSeek-V3.2": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>{reasoning}''',
-    "deepseek-ai/DeepSeek-V4-Pro": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>{reasoning}''',
-    "deepseek-ai/DeepSeek-V4-Flash": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>{reasoning}''',
+    "deepseek-ai/DeepSeek-V4-Pro": _DSV4_MAX_EFFORT_THINK,
+    "deepseek-ai/DeepSeek-V4-Flash": _DSV4_MAX_EFFORT_THINK,
     "Qwen/Qwen3-235B-A22B-Thinking-2507": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n<think>\n{reasoning}''',
     "Qwen/Qwen3-Next-80B-A3B-Thinking": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n<think>\n{reasoning}''',
     "moonshotai/Kimi-K2-Thinking": "<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|><|im_user|>user<|im_middle|>{inquiry}<|im_end|><|im_assistant|>assistant<|im_middle|><think> {reasoning}",
@@ -106,13 +107,8 @@ class SimpleInjectEngine:
             self.df = pd.DataFrame(dataset)
 
     def run(self):
-        # For chat_completions_prefill, the engine reads inquiry + reasoning
-        # from the df directly. For completions, we pre-render the template.
-        # In both modes, overwrite `prompt` with the locally-templated string
-        # so the saved pickle's `prompt` column reflects the injection (not
-        # any vestigial pre-rendered `prompt` field shipped by the dataset).
-        if self.target_mode == "chat_completions_prefill":
-            self.df['reasoning'] = self.injection_prefix
+        # Pre-render the injection prompt using the model's chat template; the
+        # /v1/completions endpoint sends this verbatim (no server-side templating).
         self.df['prompt'] = self.df['inquiry'].apply(
             lambda inq: self.target_chat_template.format(inquiry=inq, reasoning=self.injection_prefix)
         )

@@ -38,11 +38,29 @@ ARCHITECT_MODEL_CHAT_TEMPLATE = {
     "open-thoughts/OpenThinker3-7B": '''<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n<think> {reasoning}'''
 }
 
+# DeepSeek V4 max-effort preamble (byte-identical to encoding_dsv4.py's
+# REASONING_EFFORT_MAX preamble + the canonical "\n\n" separator). Including
+# it directly in the template applies max effort on the /v1/completions path
+# without needing to call the tokenizer at runtime.
+_DSV4_MAX_EFFORT_PREAMBLE = (
+    "Reasoning Effort: Absolute maximum with no shortcuts permitted.\n"
+    "You MUST be very thorough in your thinking and comprehensively decompose "
+    "the problem to resolve the root cause, rigorously stress-testing your "
+    "logic against all potential paths, edge cases, and adversarial scenarios.\n"
+    "Explicitly write out your entire deliberation process, documenting every "
+    "intermediate step, considered alternative, and rejected hypothesis to "
+    "ensure absolutely no assumption is left unchecked.\n\n"
+)
+_DSV4_MAX_EFFORT_THINK = (
+    "<｜begin▁of▁sentence｜>" + _DSV4_MAX_EFFORT_PREAMBLE +
+    "<｜User｜>{inquiry}<｜Assistant｜><think>{reasoning}"
+)
+
 TARGET_MODEL_THINK_TEMPLATE = {
     "deepseek-ai/DeepSeek-R1-0528": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>\n{reasoning}''',
     "deepseek-ai/DeepSeek-V3.2": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>{reasoning}''',
-    "deepseek-ai/DeepSeek-V4-Pro": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>{reasoning}''',
-    "deepseek-ai/DeepSeek-V4-Flash": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>{reasoning}''',
+    "deepseek-ai/DeepSeek-V4-Pro": _DSV4_MAX_EFFORT_THINK,
+    "deepseek-ai/DeepSeek-V4-Flash": _DSV4_MAX_EFFORT_THINK,
     "Qwen/Qwen3-235B-A22B-Thinking-2507": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n<think>\n{reasoning}''',
     "Qwen/Qwen3-Next-80B-A3B-Thinking": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n<think>\n{reasoning}''',
     "moonshotai/Kimi-K2-Thinking": "<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|><|im_user|>user<|im_middle|>{inquiry}<|im_end|><|im_assistant|>assistant<|im_middle|><think> {reasoning}",
@@ -54,26 +72,28 @@ TARGET_MODEL_THINK_TEMPLATE = {
 
 # Per-target overrides that steer the OpenAI_Engine call for a specific model.
 # Only keys that differ from the CLI-arg / default need to be included. Keys:
-#   mode             — "completions" (default) or "chat_completions_prefill".
-#                      chat_completions_prefill is for providers whose
-#                      /v1/completions endpoint does NOT emit `</think>` but
-#                      whose /v1/chat/completions DOES return reasoning via
-#                      `message.reasoning_content` (e.g. DeepSeek V4-Pro).
+#   mode             — "completions" (default) or "chat_completions"
 #   client_name      — provider nickname (see core.openaiapi.PROVIDERS).
 #   api_model_name   — provider API model id (when ≠ HF model id).
 #   extra_body       — dict forwarded as-is into the request body.
 TARGET_MODEL_OVERRIDES: dict[str, dict] = {
     "deepseek-ai/DeepSeek-V4-Pro": {
-        "mode": "chat_completions_prefill",
+        "mode": "completions",
         "client_name": "deepseek_beta",
         "api_model_name": "deepseek-v4-pro",
-        "extra_body": {"thinking": {"type": "enabled"}},
+        "extra_body": {
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": "max",
+        },
     },
     "deepseek-ai/DeepSeek-V4-Flash": {
         "mode": "completions",
         "client_name": "deepseek_beta",
         "api_model_name": "deepseek-v4-flash",
-        "extra_body": {"thinking": {"type": "enabled"}},
+        "extra_body": {
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": "max",
+        },
     },
     "moonshotai/Kimi-K2.6": {
         "mode": "completions",
@@ -284,11 +304,8 @@ class InceptionEngine:
 
     def target_engine_cont(self, iteration_idx: int) -> pd.DataFrame:
         nick_name = f"{self.target_nick_name}_iteration_{iteration_idx}"
-        # For prefill chat mode, OpenAI_Engine reads inquiry/reasoning directly
-        # and does NOT apply self.target_chat_template. We always overwrite
-        # `prompt` with the locally-templated string so the saved pickle's
-        # `prompt` column reflects the templated injection (not any vestigial
-        # pre-rendered `prompt` column shipped by the dataset).
+        # Build the templated prompt for /v1/completions (server does no chat
+        # templating — what we send is what the model sees).
         self.df['prompt'] = self.df.apply(lambda x: self.target_chat_template.format(inquiry=x['inquiry'], reasoning=x['reasoning']), axis=1)
 
         self.target_engine = OpenAI_Engine(

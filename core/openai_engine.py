@@ -88,39 +88,6 @@ class OpenAI_Engine():
 
         logger.info(f'Batch input prepared and stored at {self.input_filepath}')
 
-    def prepare_chat_completions_prefill_input(self):
-        """Prepare chat-completions input using assistant-prefill messages.
-
-        Each row must provide ``inquiry`` and ``reasoning`` columns. The built
-        body has messages=[{user: inquiry}, {assistant: "<think>"+reasoning}],
-        which lets providers (e.g. DeepSeek V4-Pro) that don't emit `</think>`
-        on /v1/completions still accept the architect's partial reasoning as a
-        continuation seed.
-        """
-        assert self.input_filepath is not None, 'input_filepath is required'
-        assert 'inquiry' in self.input_df.columns, "prefill mode requires 'inquiry' column"
-        assert 'reasoning' in self.input_df.columns, "prefill mode requires 'reasoning' column"
-
-        if self.input_filepath.exists():
-            self.input_filepath.unlink()
-
-        for idx, row in tqdm(self.input_df.iterrows(), total=len(self.input_df)):
-            query = openaiapi.batch_chat_completions_prefill_template(
-                inquiry=row['inquiry'],
-                reasoning=row['reasoning'],
-                model=self.model,
-                client_name=self.client_name,
-                custom_id=f'idx_{idx}',
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-                n=self.n,
-                top_p=self.top_p,
-                extra_body=self.extra_body,
-            )
-            openaiapi.cache_batch_query(self.input_filepath, query)
-
-        logger.info(f'Prefill chat-completions input prepared at {self.input_filepath}')
-
     def prepare_completions_input(self):
         """Prepare batch input file with prompts formatted from the input dataframe."""
         assert self.input_filepath is not None, 'input_filepath is required'
@@ -155,13 +122,6 @@ class OpenAI_Engine():
         elif self.mode == 'completions':
             self.prepare_completions_input()
             func_name = "completions"
-        elif self.mode == 'chat_completions_prefill':
-            # Assistant-prefill chat mode: bypass template formatting and send
-            # [{user: inquiry}, {assistant: "<think>"+reasoning}] as messages.
-            # Required for providers (e.g. DeepSeek V4-Pro) that only surface
-            # reasoning via /v1/chat/completions's reasoning_content field.
-            self.prepare_chat_completions_prefill_input()
-            func_name = "chat_completions"
         else:
             raise ValueError(f"Unknown mode: {self.mode}")
 
