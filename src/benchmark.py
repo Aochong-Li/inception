@@ -195,9 +195,9 @@ if __name__=="__main__":
     parser.add_argument("--tokenizer_name", type=str, required=True, help="Name of the tokenizer to use")
     parser.add_argument("--dataset_name_or_path", type=str, required=True, help="Name of the dataset to evaluate on")
     parser.add_argument("--subset_name", type=str, default=None, help="Name of the dataset subset (default: None)")
-    parser.add_argument("--split_name", type=str, default='test', help="Dataset split to use (default: test)")
+    parser.add_argument("--split_name", type=str, default='train', help="Dataset split to use (default: train)")
     parser.add_argument("--sample_size", type=int, default=None, help="Number of samples to use (default: None)")
-    parser.add_argument("--output_dir", type=str, default='/share/goyal/lio/reasoning/eval/', 
+    parser.add_argument("--output_dir", type=str, default='./results/wmdp_inquiries/benchmark',
                        help="Directory to save evaluation results")
     parser.add_argument("--filename_suffix", type=str, default="")
 
@@ -207,9 +207,9 @@ if __name__=="__main__":
                         help="Fraction of GPU memory to allocate")
     parser.add_argument("--dtype", type=str, default="bfloat16",
                         help="Data type for model weights (e.g., bfloat16, float16)")
-    parser.add_argument("--max_tokens", type=int, default=8192,
+    parser.add_argument("--max_tokens", type=int, default=16384,
                         help="Maximum number of output tokens")
-    parser.add_argument("--temperature", type=float, default=0.6,
+    parser.add_argument("--temperature", type=float, default=0.7,
                         help="Sampling temperature")
     parser.add_argument("--top_p", type=float, default=1.0,
                         help="Nucleus sampling parameter")
