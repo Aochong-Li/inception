@@ -41,11 +41,51 @@ ARCHITECT_MODEL_CHAT_TEMPLATE = {
 TARGET_MODEL_THINK_TEMPLATE = {
     "deepseek-ai/DeepSeek-R1-0528": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>\n{reasoning}''',
     "deepseek-ai/DeepSeek-V3.2": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>{reasoning}''',
+    "deepseek-ai/DeepSeek-V4-Pro": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>{reasoning}''',
+    "deepseek-ai/DeepSeek-V4-Flash": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>{reasoning}''',
     "Qwen/Qwen3-235B-A22B-Thinking-2507": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n<think>\n{reasoning}''',
     "Qwen/Qwen3-Next-80B-A3B-Thinking": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n<think>\n{reasoning}''',
     "moonshotai/Kimi-K2-Thinking": "<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|><|im_user|>user<|im_middle|>{inquiry}<|im_end|><|im_assistant|>assistant<|im_middle|><think> {reasoning}",
+    "moonshotai/Kimi-K2.6": "<|im_user|>user<|im_middle|>{inquiry}<|im_end|><|im_assistant|>assistant<|im_middle|><think>{reasoning}",
     "zai-org/GLM-4.6": "[gMASK]<sop><|user|>\n{inquiry}\n<think>{reasoning}",
+    "zai-org/GLM-5.1": "[gMASK]<sop><|user|>{inquiry}<|assistant|><think>{reasoning}",
     "openai/gpt-oss-120b": '''<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\nCurrent date: 2025-08-08\n\nReasoning: high\n\n# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>user<|message|>{inquiry}<|end|><|start|>assistant<|channel|>analysis<|message|>{reasoning}'''
+}
+
+# Per-target overrides that steer the OpenAI_Engine call for a specific model.
+# Only keys that differ from the CLI-arg / default need to be included. Keys:
+#   mode             — "completions" (default) or "chat_completions_prefill".
+#                      chat_completions_prefill is for providers whose
+#                      /v1/completions endpoint does NOT emit `</think>` but
+#                      whose /v1/chat/completions DOES return reasoning via
+#                      `message.reasoning_content` (e.g. DeepSeek V4-Pro).
+#   client_name      — provider nickname (see core.openaiapi.PROVIDERS).
+#   api_model_name   — provider API model id (when ≠ HF model id).
+#   extra_body       — dict forwarded as-is into the request body.
+#   reasoning_effort — e.g. "high"; folded into extra_body for /v1/completions.
+TARGET_MODEL_OVERRIDES: dict[str, dict] = {
+    "deepseek-ai/DeepSeek-V4-Pro": {
+        "mode": "chat_completions_prefill",
+        "client_name": "deepseek_beta",
+        "api_model_name": "deepseek-v4-pro",
+        "extra_body": {"thinking": {"type": "enabled"}},
+        "reasoning_effort": "high",
+    },
+    "deepseek-ai/DeepSeek-V4-Flash": {
+        "mode": "completions",
+        "client_name": "deepseek_beta",
+        "api_model_name": "deepseek-v4-flash",
+        "extra_body": {"thinking": {"type": "enabled"}},
+        "reasoning_effort": "high",
+    },
+    "moonshotai/Kimi-K2.6": {
+        "mode": "completions",
+        "extra_body": {"thinking": {"type": "enabled", "keep": "all"}},
+    },
+    "zai-org/GLM-5.1": {
+        "mode": "completions",
+        "extra_body": {"chat_template_kwargs": {"enable_thinking": True}},
+    },
 }
 
 TARGET_MODEL_INSTRUCT_TEMPLATE = {
@@ -82,6 +122,9 @@ class InceptionEngine:
         overwrite: bool = False,
         client_name: str = "",
         instruct: bool = False,
+        target_extra_body: dict | None = None,
+        target_reasoning_effort: str | None = None,
+        trial_idx: int | None = None,
         **kwargs,
     ):
         self.target_model_name = target_model_name
@@ -110,11 +153,33 @@ class InceptionEngine:
         self.min_reasoning_tokens = min_reasoning_tokens
         self.overwrite = overwrite
         self.client_name = client_name
-        
+        # Per-target reasoning controls forwarded to OpenAI_Engine. Default
+        # None preserves existing behavior for callers that do not set them.
+        self.target_extra_body = target_extra_body
+        self.target_reasoning_effort = target_reasoning_effort
+        self.trial_idx = trial_idx
+
+        # Apply per-target overrides (dict is source of truth; kwargs are the
+        # fallback for models not registered in TARGET_MODEL_OVERRIDES).
+        _overrides = TARGET_MODEL_OVERRIDES.get(target_model_name, {})
+        self.target_mode = _overrides.get("mode", "completions")
+        if "client_name" in _overrides:
+            self.client_name = _overrides["client_name"]
+        if "extra_body" in _overrides:
+            self.target_extra_body = _overrides["extra_body"]
+        if "reasoning_effort" in _overrides:
+            self.target_reasoning_effort = _overrides["reasoning_effort"]
+        # api_model_name overrides the model ID sent to the provider when the
+        # provider's API name differs from the HF model identifier.
+        self.target_api_model_name = _overrides.get("api_model_name", target_model_name)
+
         if self.architect_initial_max_tokens == 256:
             self.output_dir = os.path.join(self.results_dir, f"max_iterations_{self.max_iterations}", 'think' if not self.instruct else 'instruct')
         else:
             self.output_dir = os.path.join(self.results_dir, f"max_iterations_{self.max_iterations}", 'think' if not self.instruct else 'instruct', f"architect_initial_max_tokens_{self.architect_initial_max_tokens}")
+        # Per-trial nesting for parallel multi-trial runs.
+        if self.trial_idx is not None:
+            self.output_dir = os.path.join(self.output_dir, f"trial_{self.trial_idx}")
         os.makedirs(self.output_dir, exist_ok=True)
         
         out_pickle = os.path.join(self.output_dir, f"{self.target_nick_name}.pickle")
@@ -187,7 +252,7 @@ class InceptionEngine:
         max_tokens = self.architect_initial_max_tokens if iteration_idx == 0 else self.architect_reiterate_max_tokens
         sampling_overrides = len(self.df) * [{'max_tokens': max_tokens}]
         
-        response = self.architect_engine.generate(prompts=self.df['prompt'], sampling_overrides=sampling_overrides)
+        response = self.architect_engine.generate(prompts=self.df['prompt'], new_sampling_params=sampling_overrides)
         response['response'] = response['response'].apply(lambda x: x.split("</think>")[1].rstrip() if "</think>" in x else x)
 
         assert len(response) == len(self.df), "response and dataframe must have the same length"
@@ -198,6 +263,11 @@ class InceptionEngine:
 
     def target_engine_cont(self, iteration_idx: int) -> pd.DataFrame:
         nick_name = f"{self.target_nick_name}_iteration_{iteration_idx}"
+        # For prefill chat mode, OpenAI_Engine reads inquiry/reasoning directly
+        # and does NOT apply self.target_chat_template. We always overwrite
+        # `prompt` with the locally-templated string so the saved pickle's
+        # `prompt` column reflects the templated injection (not any vestigial
+        # pre-rendered `prompt` column shipped by the dataset).
         self.df['prompt'] = self.df.apply(lambda x: self.target_chat_template.format(inquiry=x['inquiry'], reasoning=x['reasoning']), axis=1)
 
         self.target_engine = OpenAI_Engine(
@@ -205,11 +275,13 @@ class InceptionEngine:
             nick_name= nick_name,
             batch_io_root=str(Path.home()) + "/research/openai_batch_io/wmdp",
             cache_filepath=os.path.join(self.output_dir, "api", f"{nick_name}.pickle"),
-            model=self.target_model_name,
+            model=self.target_api_model_name,
             client_name=self.client_name,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
-            mode="completions"
+            mode=self.target_mode,
+            extra_body=self.target_extra_body,
+            reasoning_effort=self.target_reasoning_effort,
         )
         
         self.target_engine.run_model(self.overwrite, num_workers=50)
@@ -348,6 +420,8 @@ if __name__=="__main__":
                         help="Overwrite existing results")
     parser.add_argument("--instruct", action="store_true",
                         help="Instruct mode: inject into assistant response instead of <think> block")
+    parser.add_argument("--trial_idx", type=int, default=None,
+                        help="Trial index for parallel multi-trial runs; when set, outputs nest under trial_{idx}/")
 
     args = parser.parse_args()
     engine = InceptionEngine(

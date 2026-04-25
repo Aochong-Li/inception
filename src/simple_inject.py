@@ -17,14 +17,19 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 from core.openai_engine import OpenAI_Engine
+from src.main import TARGET_MODEL_OVERRIDES
 
 TARGET_MODEL_THINK_TEMPLATE = {
     "deepseek-ai/DeepSeek-R1-0528": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>\n{reasoning}''',
     "deepseek-ai/DeepSeek-V3.2": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>{reasoning}''',
+    "deepseek-ai/DeepSeek-V4-Pro": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>{reasoning}''',
+    "deepseek-ai/DeepSeek-V4-Flash": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>{reasoning}''',
     "Qwen/Qwen3-235B-A22B-Thinking-2507": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n<think>\n{reasoning}''',
     "Qwen/Qwen3-Next-80B-A3B-Thinking": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n<think>\n{reasoning}''',
     "moonshotai/Kimi-K2-Thinking": "<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|><|im_user|>user<|im_middle|>{inquiry}<|im_end|><|im_assistant|>assistant<|im_middle|><think> {reasoning}",
-    "zai-org/GLM-4.6": "[gMASK]<sop><|user|>\n{inquiry}\n<think>{reasoning}"
+    "moonshotai/Kimi-K2.6": "<|im_user|>user<|im_middle|>{inquiry}<|im_end|><|im_assistant|>assistant<|im_middle|><think>{reasoning}",
+    "zai-org/GLM-4.6": "[gMASK]<sop><|user|>\n{inquiry}\n<think>{reasoning}",
+    "zai-org/GLM-5.1": "[gMASK]<sop><|user|>{inquiry}<|assistant|><think>{reasoning}",
 }
 
 TARGET_MODEL_INSTRUCT_TEMPLATE = {
@@ -54,6 +59,7 @@ class SimpleInjectEngine:
         overwrite: bool = False,
         client_name: str = "",
         instruct: bool = False,
+        trial_idx: int | None = None,
     ):
         self.target_model_name = target_model_name
         self.target_nick_name = target_nick_name
@@ -68,8 +74,20 @@ class SimpleInjectEngine:
         self.overwrite = overwrite
         self.client_name = client_name
         self.instruct = instruct
+        self.trial_idx = trial_idx
+
+        # Apply per-target overrides (mode / client / extra_body / reasoning_effort).
+        _overrides = TARGET_MODEL_OVERRIDES.get(target_model_name, {})
+        self.target_mode = _overrides.get("mode", "completions")
+        if "client_name" in _overrides:
+            self.client_name = _overrides["client_name"]
+        self.target_extra_body = _overrides.get("extra_body")
+        self.target_reasoning_effort = _overrides.get("reasoning_effort")
+        self.target_api_model_name = _overrides.get("api_model_name", target_model_name)
 
         self.output_dir = os.path.join(self.results_dir, "simple_inject", "think" if not self.instruct else "instruct")
+        if self.trial_idx is not None:
+            self.output_dir = os.path.join(self.output_dir, f"trial_{self.trial_idx}")
         os.makedirs(self.output_dir, exist_ok=True)
 
         out_pickle = os.path.join(self.output_dir, f"{self.target_nick_name}.pickle")
@@ -93,6 +111,13 @@ class SimpleInjectEngine:
             self.df = pd.DataFrame(dataset)
 
     def run(self):
+        # For chat_completions_prefill, the engine reads inquiry + reasoning
+        # from the df directly. For completions, we pre-render the template.
+        # In both modes, overwrite `prompt` with the locally-templated string
+        # so the saved pickle's `prompt` column reflects the injection (not
+        # any vestigial pre-rendered `prompt` field shipped by the dataset).
+        if self.target_mode == "chat_completions_prefill":
+            self.df['reasoning'] = self.injection_prefix
         self.df['prompt'] = self.df['inquiry'].apply(
             lambda inq: self.target_chat_template.format(inquiry=inq, reasoning=self.injection_prefix)
         )
@@ -105,11 +130,13 @@ class SimpleInjectEngine:
             nick_name=nick_name,
             batch_io_root=str(Path.home()) + "/research/openai_batch_io/wmdp",
             cache_filepath=os.path.join(self.output_dir, "api", f"{nick_name}.pickle"),
-            model=self.target_model_name,
+            model=self.target_api_model_name,
             client_name=self.client_name,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
-            mode="completions",
+            mode=self.target_mode,
+            extra_body=self.target_extra_body,
+            reasoning_effort=self.target_reasoning_effort,
         )
 
         engine.run_model(self.overwrite, num_workers=50)
@@ -154,6 +181,8 @@ if __name__ == "__main__":
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--instruct", action="store_true",
                         help="Instruct mode: inject into assistant response instead of <think> block")
+    parser.add_argument("--trial_idx", type=int, default=None,
+                        help="Trial index for parallel multi-trial runs; when set, outputs nest under trial_{idx}/")
 
     args = parser.parse_args()
     engine = SimpleInjectEngine(**vars(args))

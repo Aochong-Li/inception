@@ -42,10 +42,22 @@ class BenchmarkEval(OpenLMEngine):
                  client_name: str = '',
                  filename_suffix: str = '',
                  requests_per_second: float = 0.0,
+                 mode: str = 'chat_completions',
+                 extra_body: dict | None = None,
+                 reasoning_effort: str | None = None,
+                 trial_idx: int | None = None,
+                 api_model_name: str | None = None,
                  ):
 
         self.model_name = model_name
+        self.api_model_name = api_model_name or model_name
         self.nick_name = nick_name
+        self.mode = mode
+        self.extra_body = extra_body
+        self.reasoning_effort = reasoning_effort
+        self.trial_idx = trial_idx
+        if trial_idx is not None:
+            output_dir = os.path.join(output_dir, f"trial_{trial_idx}")
         self.output_dir = output_dir
         self.tensor_parallel_size = tensor_parallel_size
         self.gpu_memory_utilization = gpu_memory_utilization
@@ -156,12 +168,14 @@ class BenchmarkEval(OpenLMEngine):
             nick_name=f"benchmark_eval_{self.nick_name}",
             batch_io_root=str(Path.home()) + "/inception-eval/benchmark/batch_io",
             cache_filepath=self.output_dir + f"/api/{self.nick_name}_api_responses.pickle",
-            model=self.model_name,
+            model=self.api_model_name,
             client_name=self.client_name,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
             n=self.sample_k,
-            mode="chat_completions",
+            mode=self.mode,
+            extra_body=self.extra_body,
+            reasoning_effort=self.reasoning_effort,
         )
         engine.run_model(overwrite=self.overwrite)
         self.response = engine.retrieve_outputs(overwrite=self.overwrite)
@@ -204,7 +218,35 @@ if __name__=="__main__":
                         help="Rate limit for API calls (0=no limit)")
 
     parser.add_argument("--overwrite", type=str2bool, default=False)
+    parser.add_argument("--trial_idx", type=int, default=None,
+                        help="Trial index for parallel multi-trial runs; when set, outputs nest under trial_{idx}/")
+    parser.add_argument("--mode", type=str, default="chat_completions",
+                        help="OpenAI_Engine mode (chat_completions / completions / chat_completions_prefill)")
+    parser.add_argument("--extra_body", type=str, default=None,
+                        help="JSON string passed as extra_body to the API request")
+    parser.add_argument("--reasoning_effort", type=str, default=None,
+                        help="reasoning_effort param (e.g. 'high')")
     args = parser.parse_args()
 
-    engine = BenchmarkEval(**vars(args))
+    # Apply per-target overrides at __main__ level so client_name, mode,
+    # extra_body, reasoning_effort, and api_model_name flow through to
+    # BenchmarkEval consistently with src/main.py and src/simple_inject.py.
+    import json as _json
+    from src.main import TARGET_MODEL_OVERRIDES
+    args_dict = vars(args)
+    _overrides = TARGET_MODEL_OVERRIDES.get(args_dict['model_name'], {})
+    if 'client_name' in _overrides and not args_dict.get('client_name'):
+        args_dict['client_name'] = _overrides['client_name']
+    if 'mode' in _overrides:
+        args_dict['mode'] = _overrides['mode']
+    if 'extra_body' in _overrides:
+        args_dict['extra_body'] = _overrides['extra_body']
+    elif args_dict.get('extra_body'):
+        args_dict['extra_body'] = _json.loads(args_dict['extra_body'])
+    if 'reasoning_effort' in _overrides:
+        args_dict['reasoning_effort'] = _overrides['reasoning_effort']
+    if 'api_model_name' in _overrides:
+        args_dict['api_model_name'] = _overrides['api_model_name']
+
+    engine = BenchmarkEval(**args_dict)
     engine.eval()
