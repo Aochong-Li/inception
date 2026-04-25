@@ -1,7 +1,6 @@
 """Module for managing batch processing of GPT model queries with caching and parallel execution."""
 
 import os
-import json
 from typing import Any, Dict, Optional
 
 try:
@@ -14,6 +13,7 @@ import logging
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
 
 class OpenAI_Engine():
     def __init__(
@@ -31,14 +31,8 @@ class OpenAI_Engine():
         top_p: float = 1.0,
         max_tokens: int = 1024,
         n: int = 1,
-        batch_size: int = 20,
         mode: str = "chat_completions",
-        batch_rate_limit: int = 10,
         requests_per_second: float = 0.0,
-        validate_fn=None,
-        category: str = None,
-        max_validation_retries: int = 3,
-        max_consecutive_refusals: int = 0,
         extra_body: Optional[Dict[str, Any]] = None,
     ):
         self.input_df = input_df
@@ -48,7 +42,6 @@ class OpenAI_Engine():
 
         root = Path(batch_io_root) if batch_io_root else Path(os.environ.get("BATCH_IO_ROOT", ""))
         self.input_filepath = root / f"{nick_name}_input.jsonl"
-        self.batch_log_filepath = root / f"{nick_name}_batch_log.json"
         self.cache_filepath = cache_filepath if cache_filepath else root / f"{nick_name}_cache.pickle"
 
         self.model = model
@@ -57,17 +50,10 @@ class OpenAI_Engine():
         self.top_p = top_p
         self.max_tokens = max_tokens
         self.n = n
-        self.batch_size = batch_size
         self.mode = mode
-        self.batch_rate_limit = batch_rate_limit
         self.requests_per_second = requests_per_second
-        self.validate_fn = validate_fn
-        self.category = category
-        self.max_validation_retries = max_validation_retries
-        self.max_consecutive_refusals = max_consecutive_refusals
-        # Provider-specific reasoning controls. Forwarded per-request into the
-        # JSONL body so the /v1/completions and /v1/chat/completions workers
-        # send them on every call.
+        # Provider-specific reasoning controls forwarded per-request into the
+        # JSONL body so the workers send them on every call.
         self.extra_body = extra_body
 
     def prepare_chat_completions_input(self):
@@ -162,94 +148,43 @@ class OpenAI_Engine():
         logger.info(f'Batch input prepared and stored at {self.input_filepath}')
 
     def run_model(self, overwrite=False, num_workers=20):
-        """Run the GPT model batch generation, optionally overwriting existing results."""
-        if self.model == 'gpt-4o' and self.batch_rate_limit is None:
-            self.batch_rate_limit = 20
-
+        """Run batch generation, optionally overwriting existing cached results."""
         if self.mode == 'chat_completions':
-            '''Prepare batch input'''
             self.prepare_chat_completions_input()
-
-            if self.mode == 'chat_completions':
-                if overwrite and Path(self.cache_filepath).exists():
-                    raise ValueError(f'The cache file {self.cache_filepath} already exists. Please manually delete this file for security reasons.')
-                openaiapi.generate_parallel_completions(
-                    input_filepath=self.input_filepath,
-                    cache_filepath=self.cache_filepath,
-                    num_workers=num_workers,
-                    func_name="chat_completions",
-                    requests_per_second=self.requests_per_second,
-                    validate_fn=self.validate_fn,
-                    category=self.category,
-                    max_validation_retries=self.max_validation_retries,
-                    max_consecutive_refusals=self.max_consecutive_refusals,
-                )
-                logger.info(f'Results are generated and stored at {self.cache_filepath}')
-
-            elif self.mode == 'batch_chat_completions':
-                openaiapi.minibatch_stream_generate_response(input_filepath=self.input_filepath,
-                                                             batch_log_filepath=self.batch_log_filepath,
-                                                             batch_size=self.batch_size,
-                                                             batch_rate_limit=self.batch_rate_limit)
+            func_name = "chat_completions"
         elif self.mode == 'completions':
             self.prepare_completions_input()
-            openaiapi.generate_parallel_completions(
-                input_filepath=self.input_filepath,
-                cache_filepath=self.cache_filepath,
-                num_workers=num_workers,
-                func_name="completions",
-                requests_per_second=self.requests_per_second,
-                validate_fn=self.validate_fn,
-                category=self.category,
-                max_validation_retries=self.max_validation_retries,
-                max_consecutive_refusals=self.max_consecutive_refusals,
-            )
+            func_name = "completions"
         elif self.mode == 'chat_completions_prefill':
             # Assistant-prefill chat mode: bypass template formatting and send
             # [{user: inquiry}, {assistant: "<think>"+reasoning}] as messages.
             # Required for providers (e.g. DeepSeek V4-Pro) that only surface
             # reasoning via /v1/chat/completions's reasoning_content field.
             self.prepare_chat_completions_prefill_input()
-            openaiapi.generate_parallel_completions(
-                input_filepath=self.input_filepath,
-                cache_filepath=self.cache_filepath,
-                num_workers=num_workers,
-                func_name="chat_completions",
-                requests_per_second=self.requests_per_second,
-                validate_fn=self.validate_fn,
-                category=self.category,
-                max_validation_retries=self.max_validation_retries,
-                max_consecutive_refusals=self.max_consecutive_refusals,
+            func_name = "chat_completions"
+        else:
+            raise ValueError(f"Unknown mode: {self.mode}")
+
+        if overwrite and Path(self.cache_filepath).exists():
+            raise ValueError(
+                f'The cache file {self.cache_filepath} already exists. '
+                'Please manually delete this file for security reasons.'
             )
 
-        logger.info(f'Results are generated and check {self.batch_log_filepath}')
+        openaiapi.generate_parallel_completions(
+            input_filepath=self.input_filepath,
+            cache_filepath=self.cache_filepath,
+            num_workers=num_workers,
+            func_name=func_name,
+            requests_per_second=self.requests_per_second,
+        )
+        logger.info(f'Results are generated and stored at {self.cache_filepath}')
 
-    def retrieve_outputs(self, overwrite=False, cancel_in_progress_jobs: bool = False):
-        """Retrieve generated outputs from cache or batch logs."""
-        if self.cache_filepath and Path(self.cache_filepath).exists() \
-            and (self.mode == 'chat_completions' or self.mode == 'batch_chat_completions' or self.mode == 'completions' or self.mode == 'chat_completions_prefill'):
+    def retrieve_outputs(self, overwrite=False):
+        """Retrieve generated outputs from the cache pickle."""
+        if self.cache_filepath and Path(self.cache_filepath).exists():
             logger.info(f'Results are retrieved from {self.cache_filepath}')
-            output_df = pd.read_pickle(self.cache_filepath)
-        
-        elif self.mode == 'batch_chat_completions' and overwrite:
-            with open(self.batch_log_filepath) as f:
-                batch_logs = json.load(f)
-            output_dict = {}
-            for idx, batch_log_id in tqdm(batch_logs.items()):
-                status = openaiapi.check_batch_status(batch_log_id)
-                if status == 'completed':
-                    output_file_id = openaiapi.retrieve_batch_output_file_id(batch_log_id)
-                    output_dict[idx] = output_file_id
-                elif cancel_in_progress_jobs:
-                    logger.info(f'Batch {batch_log_id} at {idx} failed. Cancel {batch_log_id}')
-                    openaiapi.cancel_batch(batch_log_id)
-                else:
-                    logger.info(f'Batch {batch_log_id} at {idx} failed')
-
-            output_df = openaiapi.minibatch_retrieve_response(output_dict=output_dict)
-            output_df.to_pickle(self.cache_filepath)
-            logger.info(f'Results are retrieved and stored at {self.cache_filepath}')
-        else:
-            raise ValueError(f'The cache file {self.cache_filepath} does not exist. Please run the model first.')
-
-        return output_df
+            return pd.read_pickle(self.cache_filepath)
+        raise ValueError(
+            f'The cache file {self.cache_filepath} does not exist. Please run the model first.'
+        )
