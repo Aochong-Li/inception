@@ -47,6 +47,9 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
     "openrouter":     {"env": "OPENROUTER_API_KEY", "base_url": "https://openrouter.ai/api/v1"},
     "deepinfra":      {"env": "DEEPINFRA_API_KEY",  "base_url": "https://api.deepinfra.com/v1/openai"},
     "vllm_local":     {"env": "VLLM_API_KEY",       "base_url": os.environ.get("VLLM_BASE_URL", "http://localhost:8000/v1")},
+    # Local architect server (vLLM/SGLang). Keyless by convention; use the
+    # ARCHITECT_BASE_URL env var to point elsewhere (default localhost:8001).
+    "local_architect": {"env": None,                 "base_url": os.environ.get("ARCHITECT_BASE_URL", "http://localhost:8001/v1")},
 }
 
 RETRYABLE = (RateLimitError, APIError, APIConnectionError, APITimeoutError)
@@ -117,9 +120,14 @@ def create_client(client_name: str) -> OpenAI:
     cfg = PROVIDERS.get(client_name)
     if cfg is None:
         raise ValueError(f"Unknown provider '{client_name}'.")
-    api_key = os.getenv(cfg["env"])
-    if not api_key:
-        raise RuntimeError(f"Environment variable {cfg['env']} not set.")
+    if cfg["env"] is None:
+        # Keyless provider (e.g. local vLLM/SGLang server) — SDK still requires
+        # an api_key field, so pass a placeholder.
+        api_key = "EMPTY"
+    else:
+        api_key = os.getenv(cfg["env"])
+        if not api_key:
+            raise RuntimeError(f"Environment variable {cfg['env']} not set.")
     kwargs: Dict[str, Any] = {"api_key": api_key}
     if cfg["base_url"]:
         kwargs["base_url"] = cfg["base_url"]

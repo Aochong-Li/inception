@@ -120,6 +120,7 @@ class InceptionEngine:
         client_name: str = "",
         instruct: bool = False,
         target_extra_body: dict | None = None,
+        architect_client_name: str = "",
         **kwargs,
     ):
         self.target_model_name = target_model_name
@@ -149,6 +150,11 @@ class InceptionEngine:
         self.overwrite = overwrite
         self.client_name = client_name
         self.target_extra_body = target_extra_body
+        # Optional API-based architect: when set, the architect runs on a
+        # remote OpenAI-compatible server (e.g. local vLLM/SGLang serve) and
+        # this process does NOT load OpenLMEngine onto the GPU. This unlocks
+        # parallel inception cells sharing one warm architect server.
+        self.architect_client_name = architect_client_name
 
         # Apply per-target overrides (dict is source of truth; kwargs are the
         # fallback for models not registered in TARGET_MODEL_OVERRIDES).
@@ -174,17 +180,23 @@ class InceptionEngine:
             exit()
 
         self.architect_tokenizer = AutoTokenizer.from_pretrained(self.architect_model_name)
-        self.architect_engine = OpenLMEngine(
-            ModelConfig(
-                model_name=self.architect_model_name,
-                tokenizer_name=self.architect_model_name,
-                max_tokens=self.architect_initial_max_tokens,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                top_k=self.top_k
+        if self.architect_client_name:
+            # Architect runs remotely; skip local vLLM init to keep this process
+            # GPU-free so many inception cells can run in parallel against the
+            # same shared server.
+            self.architect_engine = None
+        else:
+            self.architect_engine = OpenLMEngine(
+                ModelConfig(
+                    model_name=self.architect_model_name,
+                    tokenizer_name=self.architect_model_name,
+                    max_tokens=self.architect_initial_max_tokens,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
+                    top_k=self.top_k
 
+                )
             )
-        )
         os.makedirs(self.output_dir + f"/api", exist_ok=True)
         self.target_engine = OpenAI_Engine(input_df=pd.DataFrame())
 
@@ -236,9 +248,32 @@ class InceptionEngine:
     def architect_engine_cont(self, iteration_idx: int) -> None:
         self.df['prompt'] = self.df.apply(lambda x: self.architect_chat_template.format(inquiry=x['inquiry'], reasoning=x['reasoning']), axis=1)
         max_tokens = self.architect_initial_max_tokens if iteration_idx == 0 else self.architect_reiterate_max_tokens
-        sampling_overrides = len(self.df) * [{'max_tokens': max_tokens}]
-        
-        response = self.architect_engine.generate(prompts=self.df['prompt'], new_sampling_params=sampling_overrides)
+
+        if self.architect_client_name:
+            # API path — send pre-templated prompts to the architect server via
+            # mode="completions" (server does not apply any chat template).
+            arch_nick = f"architect_{self.target_nick_name}_iter_{iteration_idx}"
+            arch_engine = OpenAI_Engine(
+                input_df=self.df,
+                nick_name=arch_nick,
+                batch_io_root=str(Path.home()) + "/research/openai_batch_io/wmdp",
+                cache_filepath=os.path.join(self.output_dir, "api", f"{arch_nick}.pickle"),
+                model=self.architect_model_name,
+                client_name=self.architect_client_name,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                max_tokens=max_tokens,
+                mode="completions",
+            )
+            arch_engine.run_model(self.overwrite, num_workers=50)
+            response = arch_engine.retrieve_outputs()
+            response["response"] = response["response"].fillna('')
+            response = response.explode(['response']).set_index('idx').sort_index()
+            response = response.reset_index(drop=True)
+        else:
+            sampling_overrides = len(self.df) * [{'max_tokens': max_tokens}]
+            response = self.architect_engine.generate(prompts=self.df['prompt'], new_sampling_params=sampling_overrides)
+
         response['response'] = response['response'].apply(lambda x: x.split("</think>")[1].rstrip() if "</think>" in x else x)
 
         assert len(response) == len(self.df), "response and dataframe must have the same length"
@@ -405,6 +440,8 @@ if __name__=="__main__":
                         help="Overwrite existing results")
     parser.add_argument("--instruct", action="store_true",
                         help="Instruct mode: inject into assistant response instead of <think> block")
+    parser.add_argument("--architect_client_name", type=str, default="",
+                        help="If set, run architect via remote OpenAI-compatible server (e.g. local_architect for vLLM/SGLang serve at $ARCHITECT_BASE_URL); skips local OpenLMEngine init")
 
     args = parser.parse_args()
     engine = InceptionEngine(
