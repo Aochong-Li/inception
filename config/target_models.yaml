@@ -40,10 +40,10 @@ think_models:
     client_name: "deepseek_beta"
     max_tokens: 380000
 
-  - model_name: "moonshotai/Kimi-K2.6"
-    nick_name: "Kimi-K2.6"
-    client_name: "deepinfra"
-    max_tokens: 65536
+  # - model_name: "moonshotai/Kimi-K2.6"
+  #   nick_name: "Kimi-K2.6"
+  #   client_name: "deepinfra"
+  #   max_tokens: 65536
 
   - model_name: "zai-org/GLM-5.1"
     nick_name: "GLM-5.1"
