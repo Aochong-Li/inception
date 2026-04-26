@@ -38,14 +38,71 @@ ARCHITECT_MODEL_CHAT_TEMPLATE = {
     "open-thoughts/OpenThinker3-7B": '''<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n<think> {reasoning}'''
 }
 
+# DeepSeek V4 max-effort preamble (byte-identical to encoding_dsv4.py's
+# REASONING_EFFORT_MAX preamble + the canonical "\n\n" separator). Including
+# it directly in the template applies max effort on the /v1/completions path
+# without needing to call the tokenizer at runtime.
+_DSV4_MAX_EFFORT_PREAMBLE = (
+    "Reasoning Effort: Absolute maximum with no shortcuts permitted.\n"
+    "You MUST be very thorough in your thinking and comprehensively decompose "
+    "the problem to resolve the root cause, rigorously stress-testing your "
+    "logic against all potential paths, edge cases, and adversarial scenarios.\n"
+    "Explicitly write out your entire deliberation process, documenting every "
+    "intermediate step, considered alternative, and rejected hypothesis to "
+    "ensure absolutely no assumption is left unchecked.\n\n"
+)
+_DSV4_MAX_EFFORT_THINK = (
+    "<｜begin▁of▁sentence｜>" + _DSV4_MAX_EFFORT_PREAMBLE +
+    "<｜User｜>{inquiry}<｜Assistant｜><think>{reasoning}"
+)
+
 TARGET_MODEL_THINK_TEMPLATE = {
     "deepseek-ai/DeepSeek-R1-0528": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>\n{reasoning}''',
     "deepseek-ai/DeepSeek-V3.2": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>{reasoning}''',
+    "deepseek-ai/DeepSeek-V4-Pro": _DSV4_MAX_EFFORT_THINK,
+    "deepseek-ai/DeepSeek-V4-Flash": _DSV4_MAX_EFFORT_THINK,
     "Qwen/Qwen3-235B-A22B-Thinking-2507": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n<think>\n{reasoning}''',
     "Qwen/Qwen3-Next-80B-A3B-Thinking": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n<think>\n{reasoning}''',
     "moonshotai/Kimi-K2-Thinking": "<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|><|im_user|>user<|im_middle|>{inquiry}<|im_end|><|im_assistant|>assistant<|im_middle|><think> {reasoning}",
+    "moonshotai/Kimi-K2.6": "<|im_user|>user<|im_middle|>{inquiry}<|im_end|><|im_assistant|>assistant<|im_middle|><think>{reasoning}",
     "zai-org/GLM-4.6": "[gMASK]<sop><|user|>\n{inquiry}\n<think>{reasoning}",
+    "zai-org/GLM-5.1": "[gMASK]<sop><|user|>{inquiry}<|assistant|><think>{reasoning}",
     "openai/gpt-oss-120b": '''<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\nCurrent date: 2025-08-08\n\nReasoning: high\n\n# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>user<|message|>{inquiry}<|end|><|start|>assistant<|channel|>analysis<|message|>{reasoning}'''
+}
+
+# Per-target overrides that steer the OpenAI_Engine call for a specific model.
+# Only keys that differ from the CLI-arg / default need to be included. Keys:
+#   mode             — "completions" (default) or "chat_completions"
+#   client_name      — provider nickname (see core.openaiapi.PROVIDERS).
+#   api_model_name   — provider API model id (when ≠ HF model id).
+#   extra_body       — dict forwarded as-is into the request body.
+TARGET_MODEL_OVERRIDES: dict[str, dict] = {
+    "deepseek-ai/DeepSeek-V4-Pro": {
+        "mode": "completions",
+        "client_name": "deepseek_beta",
+        "api_model_name": "deepseek-v4-pro",
+        "extra_body": {
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": "max",
+        },
+    },
+    "deepseek-ai/DeepSeek-V4-Flash": {
+        "mode": "completions",
+        "client_name": "deepseek_beta",
+        "api_model_name": "deepseek-v4-flash",
+        "extra_body": {
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": "max",
+        },
+    },
+    "moonshotai/Kimi-K2.6": {
+        "mode": "completions",
+        "extra_body": {"thinking": {"type": "enabled", "keep": "all"}},
+    },
+    "zai-org/GLM-5.1": {
+        "mode": "completions",
+        "extra_body": {"chat_template_kwargs": {"enable_thinking": True}},
+    },
 }
 
 TARGET_MODEL_INSTRUCT_TEMPLATE = {
@@ -82,6 +139,8 @@ class InceptionEngine:
         overwrite: bool = False,
         client_name: str = "",
         instruct: bool = False,
+        target_extra_body: dict | None = None,
+        architect_client_name: str = "",
         **kwargs,
     ):
         self.target_model_name = target_model_name
@@ -110,7 +169,25 @@ class InceptionEngine:
         self.min_reasoning_tokens = min_reasoning_tokens
         self.overwrite = overwrite
         self.client_name = client_name
-        
+        self.target_extra_body = target_extra_body
+        # Optional API-based architect: when set, the architect runs on a
+        # remote OpenAI-compatible server (e.g. local vLLM/SGLang serve) and
+        # this process does NOT load OpenLMEngine onto the GPU. This unlocks
+        # parallel inception cells sharing one warm architect server.
+        self.architect_client_name = architect_client_name
+
+        # Apply per-target overrides (dict is source of truth; kwargs are the
+        # fallback for models not registered in TARGET_MODEL_OVERRIDES).
+        _overrides = TARGET_MODEL_OVERRIDES.get(target_model_name, {})
+        self.target_mode = _overrides.get("mode", "completions")
+        if "client_name" in _overrides:
+            self.client_name = _overrides["client_name"]
+        if "extra_body" in _overrides:
+            self.target_extra_body = _overrides["extra_body"]
+        # api_model_name overrides the model ID sent to the provider when the
+        # provider's API name differs from the HF model identifier.
+        self.target_api_model_name = _overrides.get("api_model_name", target_model_name)
+
         if self.architect_initial_max_tokens == 256:
             self.output_dir = os.path.join(self.results_dir, f"max_iterations_{self.max_iterations}", 'think' if not self.instruct else 'instruct')
         else:
@@ -123,17 +200,23 @@ class InceptionEngine:
             exit()
 
         self.architect_tokenizer = AutoTokenizer.from_pretrained(self.architect_model_name)
-        self.architect_engine = OpenLMEngine(
-            ModelConfig(
-                model_name=self.architect_model_name,
-                tokenizer_name=self.architect_model_name,
-                max_tokens=self.architect_initial_max_tokens,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                top_k=self.top_k
+        if self.architect_client_name:
+            # Architect runs remotely; skip local vLLM init to keep this process
+            # GPU-free so many inception cells can run in parallel against the
+            # same shared server.
+            self.architect_engine = None
+        else:
+            self.architect_engine = OpenLMEngine(
+                ModelConfig(
+                    model_name=self.architect_model_name,
+                    tokenizer_name=self.architect_model_name,
+                    max_tokens=self.architect_initial_max_tokens,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
+                    top_k=self.top_k
 
+                )
             )
-        )
         os.makedirs(self.output_dir + f"/api", exist_ok=True)
         self.target_engine = OpenAI_Engine(input_df=pd.DataFrame())
 
@@ -185,9 +268,32 @@ class InceptionEngine:
     def architect_engine_cont(self, iteration_idx: int) -> None:
         self.df['prompt'] = self.df.apply(lambda x: self.architect_chat_template.format(inquiry=x['inquiry'], reasoning=x['reasoning']), axis=1)
         max_tokens = self.architect_initial_max_tokens if iteration_idx == 0 else self.architect_reiterate_max_tokens
-        sampling_overrides = len(self.df) * [{'max_tokens': max_tokens}]
-        
-        response = self.architect_engine.generate(prompts=self.df['prompt'], sampling_overrides=sampling_overrides)
+
+        if self.architect_client_name:
+            # API path — send pre-templated prompts to the architect server via
+            # mode="completions" (server does not apply any chat template).
+            arch_nick = f"architect_{self.target_nick_name}_iter_{iteration_idx}"
+            arch_engine = OpenAI_Engine(
+                input_df=self.df,
+                nick_name=arch_nick,
+                batch_io_root=str(Path.home()) + "/research/openai_batch_io/wmdp",
+                cache_filepath=os.path.join(self.output_dir, "api", f"{arch_nick}.pickle"),
+                model=self.architect_model_name,
+                client_name=self.architect_client_name,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                max_tokens=max_tokens,
+                mode="completions",
+            )
+            arch_engine.run_model(self.overwrite, num_workers=50)
+            response = arch_engine.retrieve_outputs()
+            response["response"] = response["response"].fillna('')
+            response = response.explode(['response']).set_index('idx').sort_index()
+            response = response.reset_index(drop=True)
+        else:
+            sampling_overrides = len(self.df) * [{'max_tokens': max_tokens}]
+            response = self.architect_engine.generate(prompts=self.df['prompt'], new_sampling_params=sampling_overrides)
+
         response['response'] = response['response'].apply(lambda x: x.split("</think>")[1].rstrip() if "</think>" in x else x)
 
         assert len(response) == len(self.df), "response and dataframe must have the same length"
@@ -198,6 +304,8 @@ class InceptionEngine:
 
     def target_engine_cont(self, iteration_idx: int) -> pd.DataFrame:
         nick_name = f"{self.target_nick_name}_iteration_{iteration_idx}"
+        # Build the templated prompt for /v1/completions (server does no chat
+        # templating — what we send is what the model sees).
         self.df['prompt'] = self.df.apply(lambda x: self.target_chat_template.format(inquiry=x['inquiry'], reasoning=x['reasoning']), axis=1)
 
         self.target_engine = OpenAI_Engine(
@@ -205,11 +313,12 @@ class InceptionEngine:
             nick_name= nick_name,
             batch_io_root=str(Path.home()) + "/research/openai_batch_io/wmdp",
             cache_filepath=os.path.join(self.output_dir, "api", f"{nick_name}.pickle"),
-            model=self.target_model_name,
+            model=self.target_api_model_name,
             client_name=self.client_name,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
-            mode="completions"
+            mode=self.target_mode,
+            extra_body=self.target_extra_body,
         )
         
         self.target_engine.run_model(self.overwrite, num_workers=50)
@@ -348,6 +457,8 @@ if __name__=="__main__":
                         help="Overwrite existing results")
     parser.add_argument("--instruct", action="store_true",
                         help="Instruct mode: inject into assistant response instead of <think> block")
+    parser.add_argument("--architect_client_name", type=str, default="",
+                        help="If set, run architect via remote OpenAI-compatible server (e.g. local_architect for vLLM/SGLang serve at $ARCHITECT_BASE_URL); skips local OpenLMEngine init")
 
     args = parser.parse_args()
     engine = InceptionEngine(

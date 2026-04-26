@@ -27,6 +27,29 @@ think_models:
     nick_name: "GLM-4.6"
     client_name: "deepinfra"
 
+  # New 4 (think-mode targets; client_name / mode / extra_body are
+  # sourced from src/main.py:TARGET_MODEL_OVERRIDES at runtime — the
+  # client_name listed here is informational only and gets overridden).
+  - model_name: "deepseek-ai/DeepSeek-V4-Pro"
+    nick_name: "DeepSeek-V4-Pro"
+    client_name: "deepseek"
+    max_tokens: 380000
+
+  - model_name: "deepseek-ai/DeepSeek-V4-Flash"
+    nick_name: "DeepSeek-V4-Flash"
+    client_name: "deepseek_beta"
+    max_tokens: 380000
+
+  # - model_name: "moonshotai/Kimi-K2.6"
+  #   nick_name: "Kimi-K2.6"
+  #   client_name: "deepinfra"
+  #   max_tokens: 65536
+
+  - model_name: "zai-org/GLM-5.1"
+    nick_name: "GLM-5.1"
+    client_name: "deepinfra"
+    max_tokens: 65535
+
 instruct_models:
   - model_name: "deepseek-chat"
     nick_name: "DeepSeek-V3.2"

@@ -17,14 +17,20 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 from core.openai_engine import OpenAI_Engine
+from src.main import TARGET_MODEL_OVERRIDES, TARGET_MODEL_THINK_TEMPLATE as _MAIN_THINK
+from src.main import _DSV4_MAX_EFFORT_THINK
 
 TARGET_MODEL_THINK_TEMPLATE = {
     "deepseek-ai/DeepSeek-R1-0528": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>\n{reasoning}''',
     "deepseek-ai/DeepSeek-V3.2": '''<｜begin▁of▁sentence｜><｜User｜>{inquiry}<｜Assistant｜><think>{reasoning}''',
+    "deepseek-ai/DeepSeek-V4-Pro": _DSV4_MAX_EFFORT_THINK,
+    "deepseek-ai/DeepSeek-V4-Flash": _DSV4_MAX_EFFORT_THINK,
     "Qwen/Qwen3-235B-A22B-Thinking-2507": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n<think>\n{reasoning}''',
     "Qwen/Qwen3-Next-80B-A3B-Thinking": '''<|im_start|>user\n{inquiry}<|im_end|>\n<|im_start|>assistant\n<think>\n{reasoning}''',
     "moonshotai/Kimi-K2-Thinking": "<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|><|im_user|>user<|im_middle|>{inquiry}<|im_end|><|im_assistant|>assistant<|im_middle|><think> {reasoning}",
-    "zai-org/GLM-4.6": "[gMASK]<sop><|user|>\n{inquiry}\n<think>{reasoning}"
+    "moonshotai/Kimi-K2.6": "<|im_user|>user<|im_middle|>{inquiry}<|im_end|><|im_assistant|>assistant<|im_middle|><think>{reasoning}",
+    "zai-org/GLM-4.6": "[gMASK]<sop><|user|>\n{inquiry}\n<think>{reasoning}",
+    "zai-org/GLM-5.1": "[gMASK]<sop><|user|>{inquiry}<|assistant|><think>{reasoning}",
 }
 
 TARGET_MODEL_INSTRUCT_TEMPLATE = {
@@ -69,6 +75,14 @@ class SimpleInjectEngine:
         self.client_name = client_name
         self.instruct = instruct
 
+        # Apply per-target overrides (mode / client / extra_body).
+        _overrides = TARGET_MODEL_OVERRIDES.get(target_model_name, {})
+        self.target_mode = _overrides.get("mode", "completions")
+        if "client_name" in _overrides:
+            self.client_name = _overrides["client_name"]
+        self.target_extra_body = _overrides.get("extra_body")
+        self.target_api_model_name = _overrides.get("api_model_name", target_model_name)
+
         self.output_dir = os.path.join(self.results_dir, "simple_inject", "think" if not self.instruct else "instruct")
         os.makedirs(self.output_dir, exist_ok=True)
 
@@ -93,6 +107,8 @@ class SimpleInjectEngine:
             self.df = pd.DataFrame(dataset)
 
     def run(self):
+        # Pre-render the injection prompt using the model's chat template; the
+        # /v1/completions endpoint sends this verbatim (no server-side templating).
         self.df['prompt'] = self.df['inquiry'].apply(
             lambda inq: self.target_chat_template.format(inquiry=inq, reasoning=self.injection_prefix)
         )
@@ -105,11 +121,12 @@ class SimpleInjectEngine:
             nick_name=nick_name,
             batch_io_root=str(Path.home()) + "/research/openai_batch_io/wmdp",
             cache_filepath=os.path.join(self.output_dir, "api", f"{nick_name}.pickle"),
-            model=self.target_model_name,
+            model=self.target_api_model_name,
             client_name=self.client_name,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
-            mode="completions",
+            mode=self.target_mode,
+            extra_body=self.target_extra_body,
         )
 
         engine.run_model(self.overwrite, num_workers=50)
