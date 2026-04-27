@@ -5,16 +5,19 @@ Full-scale DeepSeek V3.2 judge evaluation master script.
 Evaluates all inception data pickles under evaluation/inception_data/ using
 deepseek-chat (DeepSeek V3.2) as the judge via the DeepSeek API.
 
-Covers 3 branches:
+Covers 4 branches:
   - max_iterations_5  (think/ + instruct/)
   - ablation          (max_iterations_1/think/architect_initial_max_tokens_{N}/)
   - simple_inject     (think/ + instruct/)
+  - benchmark         (think/ + instruct/) — uses `response` directly as
+                      reasoning_trace (no architect/target iteration columns)
 
-Output: evaluation/eval_deepseek_judge/<branch_subpath>/<model>/
+Output: evaluation/eval_deepseek_chat_judge/<branch_subpath>/<model>/
 
 Usage:
   python evaluation/scripts/run_deepseek_judge_full.py
   python evaluation/scripts/run_deepseek_judge_full.py --branch ablation
+  python evaluation/scripts/run_deepseek_judge_full.py --branch benchmark
   python evaluation/scripts/run_deepseek_judge_full.py --dry-run
   python evaluation/scripts/run_deepseek_judge_full.py --rps 3.0
 """
@@ -73,7 +76,7 @@ JUDGE_STRONGREJECT_ONLY = False  # Comprehensive mode
 DEFAULT_RPS = 5.0
 
 INCEPTION_DATA = _eval_dir / "inception_data"
-OUTPUT_BASE = _eval_dir / "eval_deepseek_judge"
+OUTPUT_BASE = _eval_dir / "eval_deepseek_chat_judge"
 
 # ── EvalJob definition ────────────────────────────────────────────────────────
 
@@ -134,19 +137,22 @@ def _discover_pickles(directory: Path, branch: str, label: str, output_subpath: 
     return jobs
 
 
-def build_eval_jobs(branch_filter: str) -> list:
+def build_eval_jobs(branch_filter: str, models_filter: list = None) -> list:
     """
-    Auto-discover all pickles across the 3 branches and return a flat list of EvalJobs.
+    Auto-discover all pickles across the 4 branches and return a flat list of EvalJobs.
 
-    Output path mapping:
+    Output path mapping (rooted at eval_deepseek_chat_judge/):
       max_iterations_5/{think|instruct}/{model}.pickle
-          -> eval_deepseek_judge/max_iterations_5/{think|instruct}/{model}/
+          -> max_iterations_5/{think|instruct}/{model}/
 
       max_iterations_1/think/architect_initial_max_tokens_{N}/{model}.pickle
-          -> eval_deepseek_judge/ablation/think/tokens_{N}/{model}/
+          -> ablation/think/tokens_{N}/{model}/
 
       simple_inject/{think|instruct}/{model}.pickle
-          -> eval_deepseek_judge/simple_inject/{think|instruct}/{model}/
+          -> simple_inject/{think|instruct}/{model}/
+
+      benchmark/{think|instruct}/{model}.pickle
+          -> benchmark/{think|instruct}/{model}/
     """
     jobs = []
 
@@ -168,12 +174,11 @@ def build_eval_jobs(branch_filter: str) -> list:
             for token_dir in sorted(ablation_base.iterdir()):
                 if not token_dir.is_dir():
                     continue
-                # Extract token level from directory name (e.g., architect_initial_max_tokens_512)
-                dir_name = token_dir.name
-                if "max_tokens_" in dir_name:
-                    token_level = dir_name.split("max_tokens_")[-1]
-                else:
-                    token_level = dir_name
+                # Only architect_initial_max_tokens_* subdirs are ablation cells;
+                # skip api/, checkpoints/, etc.
+                if not token_dir.name.startswith("architect_initial_max_tokens_"):
+                    continue
+                token_level = token_dir.name.split("max_tokens_")[-1]
                 jobs += _discover_pickles(
                     token_dir,
                     branch="ablation",
@@ -193,6 +198,27 @@ def build_eval_jobs(branch_filter: str) -> list:
                     label=f"simple_inject/{subtype}",
                     output_subpath=f"simple_inject/{subtype}",
                 )
+
+    # ── Branch 4: benchmark ───────────────────────────────────────────────────
+    # Benchmark pickles have inquiry/response/category but no architect/target
+    # iteration columns, so reasoning_traces is sourced from `response` directly
+    # in run_single_eval (preprocessing branches on job.branch).
+    if branch_filter in ("all", "benchmark"):
+        benchmark_base = INCEPTION_DATA / "benchmark"
+        if benchmark_base.exists():
+            for subtype in ("think", "instruct"):
+                src_dir = benchmark_base / subtype
+                jobs += _discover_pickles(
+                    src_dir,
+                    branch="benchmark",
+                    label=f"benchmark/{subtype}",
+                    output_subpath=f"benchmark/{subtype}",
+                )
+
+    # Filter by model name if requested
+    if models_filter:
+        models_set = set(models_filter)
+        jobs = [j for j in jobs if j.model_name in models_set]
 
     return jobs
 
@@ -221,7 +247,17 @@ def run_single_eval(job: EvalJob, rps: float, logger: logging.Logger) -> None:
         logger.info(f"  Preprocessed pickle exists, reusing: {preprocessed_path}")
         df_preprocessed = pd.read_pickle(preprocessed_path)
     else:
-        df["reasoning_traces"] = df.apply(get_full_trace, axis=1)
+        if job.branch in ("benchmark", "simple_inject"):
+            # These pickles have no architect/target iteration columns — the
+            # model's `response` IS the full content the judge needs. Using
+            # get_full_trace would return None for every row.
+            if "response" not in df.columns:
+                raise ValueError(
+                    f"{job.branch} pickle {job.input_pickle} missing 'response' column"
+                )
+            df["reasoning_traces"] = df["response"].astype(str)
+        else:
+            df["reasoning_traces"] = df.apply(get_full_trace, axis=1)
         df.to_pickle(preprocessed_path)
         df_preprocessed = df
         logger.info(f"  Preprocessed: saved {preprocessed_path}")
@@ -242,6 +278,7 @@ def run_single_eval(job: EvalJob, rps: float, logger: logging.Logger) -> None:
         temperature=JUDGE_TEMPERATURE,
         max_tokens=JUDGE_MAX_TOKENS,
         requests_per_second=rps,
+        num_workers=50,
         max_validation_retries=JUDGE_MAX_VALIDATION_RETRIES,
         strongreject_only=JUDGE_STRONGREJECT_ONLY,
         max_consecutive_refusals=0,
@@ -273,12 +310,13 @@ def fmt_duration(seconds: float) -> str:
 
 
 def main():
+    global OUTPUT_BASE
     parser = argparse.ArgumentParser(
         description="Run full DeepSeek V3.2 judge evaluation over all inception data pickles."
     )
     parser.add_argument(
         "--branch",
-        choices=["max_iterations_5", "ablation", "simple_inject", "all"],
+        choices=["max_iterations_5", "ablation", "simple_inject", "benchmark", "all"],
         default="all",
         help="Which branch(es) to evaluate (default: all)",
     )
@@ -293,12 +331,33 @@ def main():
         default=DEFAULT_RPS,
         help=f"Requests per second rate limit (default: {DEFAULT_RPS})",
     )
+    parser.add_argument(
+        "--output-base",
+        type=str,
+        default=str(OUTPUT_BASE),
+        help=f"Output directory base (default: {OUTPUT_BASE})",
+    )
+    parser.add_argument(
+        "--models",
+        type=str,
+        default=None,
+        help="Comma-separated list of model nick_names to filter to (e.g. 'DeepSeek-V4-Pro,GLM-5.1'). "
+             "If omitted, all discovered models run.",
+    )
     args = parser.parse_args()
+
+    OUTPUT_BASE = Path(args.output_base)
+    models_filter = None
+    if args.models:
+        models_filter = [m.strip() for m in args.models.split(",") if m.strip()]
 
     logger = setup_logging(OUTPUT_BASE)
 
     # ── Discover jobs ─────────────────────────────────────────────────────────
-    all_jobs = build_eval_jobs(args.branch)
+    # build_eval_jobs/_discover_pickles read the (now-overridden) module-global
+    # OUTPUT_BASE directly when constructing each job's output_dir, so no rewrite
+    # is needed when --output-base is supplied.
+    all_jobs = build_eval_jobs(args.branch, models_filter=models_filter)
     total = len(all_jobs)
     total_rows = total * 800  # Each pickle has 800 rows by convention
 

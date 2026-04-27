@@ -85,6 +85,7 @@ class SafetyEvaluator:
         max_validation_retries: int = 3,  # Max retries for validation failures
         strongreject_only: bool = False,  # Use StrongREJECT template for all rows
         max_consecutive_refusals: int = 0,  # Stop category after N consecutive refusals (0 = disabled)
+        num_workers: int = 20,  # Concurrent in-flight API requests
     ):
         """
         Initialize the Safety Judge.
@@ -116,6 +117,7 @@ class SafetyEvaluator:
         self.requests_per_second = requests_per_second
         self.max_validation_retries = max_validation_retries
         self.strongreject_only = strongreject_only
+        self.num_workers = num_workers
         self.max_consecutive_refusals = max_consecutive_refusals
         self.category_labels = {
             "chemical": chemical_label,
@@ -285,9 +287,29 @@ class SafetyEvaluator:
                     else:
                         parsed_row = {}
             except (json.JSONDecodeError, ValueError, TypeError, SyntaxError) as e:
-                # If parsing fails, leave as empty dict
+                # Fallback: locate the LAST <analysis>...</analysis> and parse JSON
+                # appearing AFTER it. This rescues responses where <think> blocks
+                # contain stray "{" that confused the original boundary scan.
                 parsed_row = {}
-                if isinstance(idx, int) and idx < 5:  # Only print first few errors to avoid spam
+                try:
+                    last_close = str(response_str).rfind('</analysis>')
+                    if last_close >= 0:
+                        after = str(response_str)[last_close + len('</analysis>'):]
+                        i = after.find('{')
+                        j = after.rfind('}') + 1
+                        if i >= 0 and j > i:
+                            json_str = after[i:j]
+                            try:
+                                json_str = codecs.decode(json_str, 'unicode_escape')
+                            except (UnicodeDecodeError, ValueError):
+                                pass
+                            data = json.loads(json_str)
+                            if isinstance(data, dict):
+                                parsed_row = data
+                                all_keys.update(data.keys())
+                except (json.JSONDecodeError, ValueError, TypeError, SyntaxError):
+                    parsed_row = {}
+                if not parsed_row and isinstance(idx, int) and idx < 5:
                     print(f"Warning: Failed to parse JSON for idx {idx}: {e}")
                     print(
                         f"  Response string (first 200 chars): {str(response_str)[:200]}")
@@ -418,7 +440,10 @@ class SafetyEvaluator:
             template_map={
                 "rendered_prompt": "rendered_prompt"
             },
-            nick_name=f"safety_judge_{category}",
+            # nick_name is the basis for the on-disk batch_io filename; including
+            # eval_model makes filenames unique per judge so two judge processes
+            # writing to the same batch_io_root don't race on the same file.
+            nick_name=f"safety_judge_{category}_{self.eval_model.replace('/', '_')}",
             batch_io_root=str(Path.home()) +
             "/inception-eval/evaluation/batch_io",
             cache_filepath=os.path.join(
@@ -436,7 +461,8 @@ class SafetyEvaluator:
 
         # Run the synchronous run_model in a thread pool so it can be awaited
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, engine.run_model, overwrite)
+        import functools
+        await loop.run_in_executor(None, functools.partial(engine.run_model, overwrite, num_workers=self.num_workers))
 
     def _merge_results(self) -> pd.DataFrame:
         dataframes = []
@@ -688,7 +714,7 @@ class SafetyEvaluator:
                 template_map={
                     "rendered_prompt": "rendered_prompt"
                 },
-                nick_name=f"safety_judge_{category}_reeval",
+                nick_name=f"safety_judge_{category}_reeval_{self.eval_model.replace('/', '_')}",
                 batch_io_root=str(Path.home()) +
                 "/inception-eval/evaluation/batch_io",
                 cache_filepath=cache_filepath,
@@ -705,7 +731,8 @@ class SafetyEvaluator:
 
             # Run re-evaluation
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, engine.run_model, False)
+            import functools
+            await loop.run_in_executor(None, functools.partial(engine.run_model, False, num_workers=self.num_workers))
 
             # Load re-evaluation results
             if os.path.exists(cache_filepath):

@@ -81,6 +81,7 @@ DEFAULT_RPS = 30.0                             # Local vLLM: no API quota
 DEFAULT_VLLM_URL = "http://localhost:8000/v1"
 
 INCEPTION_DATA = _eval_dir / "inception_data"
+BENCHMARK_DATA = _project_root / "results" / "benchmark"
 OUTPUT_BASE = _eval_dir / "eval_qwen397b_judge"
 
 # -- EvalJob -------------------------------------------------------------------
@@ -178,19 +179,24 @@ def _discover_pickles(directory: Path, branch: str, label: str, output_subpath: 
     return jobs
 
 
-def build_eval_jobs(branch_filter: str) -> list:
+def build_eval_jobs(branch_filter: str, models_filter: list = None) -> list:
     """
-    Auto-discover all pickles across the 3 branches and return a flat list of EvalJobs.
+    Auto-discover all pickles across the branches and return a flat list of EvalJobs.
 
     Output path mapping:
       max_iterations_5/{think|instruct}/{model}.pickle
-          -> eval_qwen_judge/max_iterations_5/{think|instruct}/{model}/
+          -> <output_base>/max_iterations_5/{think|instruct}/{model}/
 
       max_iterations_1/think/architect_initial_max_tokens_{N}/{model}.pickle
-          -> eval_qwen_judge/ablation/think/tokens_{N}/{model}/
+          -> <output_base>/ablation/think/tokens_{N}/{model}/
 
       simple_inject/{think|instruct}/{model}.pickle
-          -> eval_qwen_judge/simple_inject/{think|instruct}/{model}/
+          -> <output_base>/simple_inject/{think|instruct}/{model}/
+
+      results/benchmark/{think|instruct}/{model}.pickle
+          -> <output_base>/benchmark/{think|instruct}/{model}/
+
+    If models_filter is provided, only jobs whose model_name is in the list are returned.
     """
     jobs = []
 
@@ -212,11 +218,11 @@ def build_eval_jobs(branch_filter: str) -> list:
             for token_dir in sorted(ablation_base.iterdir()):
                 if not token_dir.is_dir():
                     continue
-                dir_name = token_dir.name
-                if "max_tokens_" in dir_name:
-                    token_level = dir_name.split("max_tokens_")[-1]
-                else:
-                    token_level = dir_name
+                # Only architect_initial_max_tokens_* subdirs are ablation cells;
+                # skip api/, checkpoints/, etc.
+                if not token_dir.name.startswith("architect_initial_max_tokens_"):
+                    continue
+                token_level = token_dir.name.split("max_tokens_")[-1]
                 jobs += _discover_pickles(
                     token_dir,
                     branch="ablation",
@@ -237,13 +243,37 @@ def build_eval_jobs(branch_filter: str) -> list:
                     output_subpath=f"simple_inject/{subtype}",
                 )
 
+    # Branch 4: benchmark (no attack, direct queries)
+    if branch_filter in ("all", "benchmark"):
+        if BENCHMARK_DATA.exists():
+            for subtype in ("think", "instruct"):
+                src_dir = BENCHMARK_DATA / subtype
+                jobs += _discover_pickles(
+                    src_dir,
+                    branch="benchmark",
+                    label=f"benchmark/{subtype}",
+                    output_subpath=f"benchmark/{subtype}",
+                )
+
+    # Filter by model name if requested
+    if models_filter:
+        models_set = set(models_filter)
+        jobs = [j for j in jobs if j.model_name in models_set]
+
     return jobs
 
 
 # -- Per-job execution ---------------------------------------------------------
 
 
-def run_single_eval(job: EvalJob, rps: float, logger: logging.Logger) -> None:
+def run_single_eval(
+    job: EvalJob,
+    rps: float,
+    logger: logging.Logger,
+    eval_model: str = JUDGE_MODEL,
+    client_name: str = JUDGE_PROVIDER,
+    max_tokens: int = JUDGE_MAX_TOKENS,
+) -> None:
     """Execute preprocessing + SafetyEvaluator for a single pickle."""
     # Step 1: Load source pickle
     df = pd.read_pickle(job.input_pickle)
@@ -260,13 +290,23 @@ def run_single_eval(job: EvalJob, rps: float, logger: logging.Logger) -> None:
         logger.info(f"  Preprocessed pickle exists, reusing: {preprocessed_path}")
         df_preprocessed = pd.read_pickle(preprocessed_path)
     else:
-        df["reasoning_traces"] = df.apply(get_full_trace, axis=1)
+        if job.branch in ("benchmark", "simple_inject"):
+            # These pickles have no architect/target iteration columns — the
+            # model's `response` IS the full content the judge needs. Using
+            # get_full_trace would return None for every row.
+            if "response" not in df.columns:
+                raise ValueError(
+                    f"{job.branch} pickle {job.input_pickle} missing 'response' column"
+                )
+            df["reasoning_traces"] = df["response"].astype(str)
+        else:
+            df["reasoning_traces"] = df.apply(get_full_trace, axis=1)
         df.to_pickle(preprocessed_path)
         df_preprocessed = df
         logger.info(f"  Preprocessed: saved {preprocessed_path}")
 
     # Step 3: Instantiate SafetyEvaluator
-    logger.info(f"  Running SafetyEvaluator...")
+    logger.info(f"  Running SafetyEvaluator (model={eval_model}, provider={client_name})...")
     evaluator = SafetyEvaluator(
         input_df=df_preprocessed,
         inquiry_col="inquiry",
@@ -276,11 +316,12 @@ def run_single_eval(job: EvalJob, rps: float, logger: logging.Logger) -> None:
         bioterrorism_label="wmdp-bio",
         output_dir=str(job.output_dir),
         nick_name=job.model_name,
-        eval_model=JUDGE_MODEL,
-        client_name=JUDGE_PROVIDER,
+        eval_model=eval_model,
+        client_name=client_name,
         temperature=JUDGE_TEMPERATURE,
-        max_tokens=JUDGE_MAX_TOKENS,
+        max_tokens=max_tokens,
         requests_per_second=rps,
+        num_workers=50,
         max_validation_retries=JUDGE_MAX_VALIDATION_RETRIES,
         strongreject_only=JUDGE_STRONGREJECT_ONLY,
         max_consecutive_refusals=0,
@@ -312,12 +353,14 @@ def fmt_duration(seconds: float) -> str:
 
 
 def main():
+    global OUTPUT_BASE  # allow override
+
     parser = argparse.ArgumentParser(
-        description="Run full Qwen3.5-122B local judge evaluation over all inception data pickles."
+        description="Run full Qwen3.5-397B judge evaluation over all inception data pickles."
     )
     parser.add_argument(
         "--branch",
-        choices=["max_iterations_5", "ablation", "simple_inject", "all"],
+        choices=["max_iterations_5", "ablation", "simple_inject", "benchmark", "all"],
         default="all",
         help="Which branch(es) to evaluate (default: all)",
     )
@@ -336,34 +379,83 @@ def main():
         "--vllm-url",
         type=str,
         default=DEFAULT_VLLM_URL,
-        help=f"vLLM server base URL (default: {DEFAULT_VLLM_URL})",
+        help=f"vLLM server base URL — only used when --client-name=vllm_local (default: {DEFAULT_VLLM_URL})",
+    )
+    parser.add_argument(
+        "--eval-model",
+        type=str,
+        default=JUDGE_MODEL,
+        help=f"Judge model identifier passed to the provider (default: {JUDGE_MODEL}). "
+             f"For DeepInfra hosted Qwen3.5-397B, use 'Qwen/Qwen3.5-397B-A17B'.",
+    )
+    parser.add_argument(
+        "--client-name",
+        type=str,
+        default=JUDGE_PROVIDER,
+        help=f"Provider name from core/openaiapi.py PROVIDERS (default: {JUDGE_PROVIDER}). "
+             f"Examples: vllm_local, deepinfra, deepseek.",
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=JUDGE_MAX_TOKENS,
+        help=f"Judge max output tokens (default: {JUDGE_MAX_TOKENS}). "
+             f"Lower for hosted APIs with caps (e.g. 8192 for deepseek-chat).",
+    )
+    parser.add_argument(
+        "--output-base",
+        type=str,
+        default=str(OUTPUT_BASE),
+        help=f"Output directory base (default: {OUTPUT_BASE})",
+    )
+    parser.add_argument(
+        "--models",
+        type=str,
+        default=None,
+        help="Comma-separated list of model nick_names to filter to (e.g. 'DeepSeek-V4-Pro,GLM-5.1'). "
+             "If omitted, all discovered models run.",
     )
     args = parser.parse_args()
 
+    # Override OUTPUT_BASE if requested
+    OUTPUT_BASE = Path(args.output_base)
+
+    # Parse model filter
+    models_filter = None
+    if args.models:
+        models_filter = [m.strip() for m in args.models.split(",") if m.strip()]
+
     # Set VLLM_BASE_URL for the provider registry + set dummy API key
+    # (harmless when client_name != vllm_local)
     os.environ["VLLM_BASE_URL"] = args.vllm_url
     os.environ.setdefault("VLLM_API_KEY", "EMPTY")
 
     logger = setup_logging(OUTPUT_BASE)
 
-    # -- Pre-flight: verify vLLM server is up ---------------------------------
-    if not args.dry_run:
+    # -- Pre-flight: verify vLLM server is up (only for local serving) -------
+    if not args.dry_run and args.client_name == "vllm_local":
         if not check_vllm_server(args.vllm_url, logger):
             sys.exit(1)
 
     # -- Discover jobs --------------------------------------------------------
-    all_jobs = build_eval_jobs(args.branch)
+    # build_eval_jobs/_discover_pickles read the (now-overridden) module-global
+    # OUTPUT_BASE directly when constructing each job's output_dir, so no rewrite
+    # is needed when --output-base is supplied.
+    all_jobs = build_eval_jobs(args.branch, models_filter=models_filter)
     total = len(all_jobs)
     total_rows = total * 800
 
-    logger.info("===== QWEN LOCAL JUDGE FULL EVALUATION =====")
+    logger.info("===== QWEN JUDGE FULL EVALUATION =====")
     logger.info(
-        f"Judge: {JUDGE_MODEL} | Provider: {JUDGE_PROVIDER} (local vLLM) | Mode: comprehensive"
+        f"Judge: {args.eval_model} | Provider: {args.client_name}"
     )
-    logger.info(f"vLLM URL: {args.vllm_url}")
+    if args.client_name == "vllm_local":
+        logger.info(f"vLLM URL: {args.vllm_url}")
+    if models_filter:
+        logger.info(f"Models filter: {models_filter}")
     logger.info(f"Total jobs: {total} | Estimated rows: {total_rows:,}")
     logger.info(f"Output: {OUTPUT_BASE}")
-    logger.info(f"RPS: {args.rps} | max_tokens: {JUDGE_MAX_TOKENS} | temperature: {JUDGE_TEMPERATURE}")
+    logger.info(f"RPS: {args.rps} | max_tokens: {args.max_tokens} | temperature: {JUDGE_TEMPERATURE}")
     logger.info("-" * 45)
 
     if not all_jobs:
@@ -435,7 +527,14 @@ def main():
         job_start = time.monotonic()
 
         try:
-            run_single_eval(job, rps=args.rps, logger=logger)
+            run_single_eval(
+                job,
+                rps=args.rps,
+                logger=logger,
+                eval_model=args.eval_model,
+                client_name=args.client_name,
+                max_tokens=args.max_tokens,
+            )
             elapsed = time.monotonic() - job_start
             logger.info(
                 f"[{job_num}/{total}] DONE {job.label}/{job.model_name} ({fmt_duration(elapsed)})"
