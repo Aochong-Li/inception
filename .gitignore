@@ -75,6 +75,7 @@ evaluation/eval_qwen397b_judge/
 evaluation/eval_deepseek_chat_judge/
 evaluation/eval_deepseek_chat_judge_v1/
 evaluation/EVAL-RESULTS.zip
+evaluation/rerun_failures/
 
 # Local Apptainer prerequisite failure dumps (see deployment/vllm-judge/README.md)
 deployment/vllm-judge/APPTAINER_PREREQ_FAILURE_REPORT.txt
