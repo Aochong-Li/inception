@@ -46,6 +46,7 @@ Harmful query → Architect (OpenThinker3-7B, uncensored, 7B params)
 | Compute | Trivial | 7B architect on a $200 GPU. Target via API. |
 
 ## Current TODOs
+- [ ] Detailed data analysis on the now-clean evaluation set (next focus — see `data_analysis/` notebooks; topics + comparisons TBD)
 - [ ] Fix high-priority calibration errors (bio ex 2 delivery/route, chem ex 4&5 grade, bio ex 10 threat/delivery)
 - [ ] Fix bio ex 8 severity 7→8 (self-contradictory — analysis says 8, JSON assigns 7)
 - [ ] Decide: replace bio ex 10 (1918 flu) with deliberate bioweapon scenario for better severity-10 ceiling
@@ -53,23 +54,26 @@ Harmful query → Architect (OpenThinker3-7B, uncensored, 7B params)
 - [ ] Add incapacitant to chem agent_class enum (or add routing rule for opioid/CNS agents)
 - [ ] Add chem injection delivery example (zero examples currently)
 - [ ] Reassign bio ex 6 (WWI Livestock) severity 3→6
-- [ ] Danger score aggregation and comparison: inception vs benchmark baseline
 - [ ] Post-hoc normalize refusal rows across both eval sets (floor values for complied=false)
 
 ## In Progress
-- [ ] Qwen3.5-397B judge eval on 256-token ablation (3 models, running)
+- [ ] Detailed data analysis (notebooks live in `data_analysis/` — copied from origin/eval; reproducing/extending blog claims on the new sweep)
 - [ ] Kimi-K2.5 judge eval — NVFP4 on 4x B200 hangs during post-loading init (sglang 0.5.9 + modelopt quantization issue). Options: DeepInfra API or wait for 8x B200 for BF16.
 
 ## Recently Done
-- **Benchmark baseline completed** — 13 models (8 think + 5 instruct) run on 800 harmful queries with no attack. Results in `results/benchmark/{think,instruct}/`
-- **Benchmark eval completed** — deepseek-chat judge on all 13 benchmark models, 800/800 valid per model. Results in `evaluation/eval_deepseek_chat_judge/{think,instruct}/`
-- **256-token architect ablation completed** — 3 models (DeepSeek-V3.2, GPT-OSS-120B, Qwen3-Next-80B-A3B-Thinking). Results in `results/max_iterations_1/think/` (256 is the default, no subdirectory)
-- **256-token ablation eval (deepseek-chat)** — all 3 models, 800/800 valid. Results in `evaluation/eval_deepseek_chat_judge/ablation/think/tokens_256/`
+- **Both judges fully evaluated and 100% clean (108,800 rows total, 0 failures)** — DeepSeek-chat: 74 pickles / 59,200 rows; Qwen3.5-397B (FP8 via SGLang on 4×B200, BF16 via DeepInfra for fallbacks): 62 pickles / 49,600 rows. All `raw_response` populated, all `severity_level` parsed.
+- **Failure-recovery toolchain shipped (commit `c288597`)** — 4-stage pipeline (`build_rerun_manifest` → `apply_qwen_reparse_inplace` → `rerun_failures` → `apply_rerun_patches`). Initial sweep had 663 broken rows (~0.6%); patched parser recovered 163 offline, API rerun fixed the remaining 500 (~$0.05 DS + ~$5–10 QW DeepInfra). Manifests are derived data and gitignored under `evaluation/rerun_failures/`.
+- **Parser robustness patch (commit `00ac84c`)** — added a fallback in `safety-judge.py` that locates the LAST `</analysis>` and parses JSON appearing after it, rescuing rows where stray `{` inside `<think>` blocks confused the original boundary scan. Strictly additive (only runs when primary parse fails). Recovered 163/180 qwen parse-fails offline.
+- **Judge runner flags (commit `00ac84c`)** — added `--output-base` and `--models` to both `run_deepseek_judge_full.py` and `run_qwen_judge_full.py` so reruns can target a parallel `_new` dir + a model subset. Also added `num_workers` to `SafetyEvaluator` and uniquified the `batch_io` `nick_name` with `eval_model` so two judge processes can share `batch_io_root` without racing.
+- **3 new frontier models added to the sweep** — DeepSeek-V4-Pro, DeepSeek-V4-Flash, GLM-5.1 (think) across `max_iterations_5`, `ablation/{128,256,512,768,1024}`, `simple_inject`, and `benchmark` branches. Hyperparameters audited against `lio_dev` for parity (`config/target_models.yaml`).
+- **Data analysis notebooks copied from origin/eval (commit `a383045`)** — 6 notebooks in `data_analysis/`: ablation, benchmark baseline, bio_vs_chem deep dive, cross-judge agreement, max_iterations_5 inception, simple_inject baseline.
+- **Benchmark baseline completed** — 13 models (8 think + 5 instruct) run on 800 harmful queries with no attack.
+- **256-token architect ablation completed** — 3 models (DeepSeek-V3.2, GPT-OSS-120B, Qwen3-Next-80B-A3B-Thinking).
 - **Fixed duplicate row inflation** — SafetyEvaluator appends to raw pickles on rerun instead of overwriting. Fixed by deduplicating on index (keep='last'). Affected 5 think models.
 - **Fixed GLM-4.6 think incomplete bio eval** — only 67/400 bio rows were judged (run interrupted). Reran full 400 bio rows.
-- Qwen3.5-397B-A17B-FP8 full judge eval completed — **34/34 models, 27,200 rows, 0 empty responses** — results in `evaluation/eval_qwen397b_judge/`
-- 297+14 context-length failures patched via DeepInfra API (see eval ops notes below)
-- Re-ran `ablation/think/tokens_128/GPT-OSS-120B` after uncorrupted input pickle restored
+- **Qwen3.5-397B-A17B-FP8 full judge eval completed** — 34/34 models initial sweep, results in `evaluation/eval_qwen397b_judge/`.
+- 297+14 context-length failures patched via DeepInfra API (see eval ops notes below).
+- Re-ran `ablation/think/tokens_128/GPT-OSS-120B` after uncorrupted input pickle restored.
 
 ## Key Results
 
